@@ -21,7 +21,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install requests numpy pandas
-          pip install git+https://github.com/twopirllc/pandas-ta.git
+          pip install pandas-ta-quant || pip install pandas-ta
 
       - name: Run Trading Bots
         env:
