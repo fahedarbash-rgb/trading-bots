@@ -1,9 +1,8 @@
 import datetime
-import time
 import requests
-import numpy as np
 import pandas as pd
 import pandas_ta as ta
+import time
 
 TELEGRAM_BOT_TOKEN = "8935193100:AAGGIvDsapewUqGO-Z0Faas46D0VNgGkQKo"
 TELEGRAM_CHAT_ID = "5620413191"
@@ -20,7 +19,6 @@ def send_telegram_message(message):
 
 def analyze_strict_market(symbol):
     try:
-        # جلب بيانات فريم 15 دقيقة للتحقيق الفني والدخول
         url_15m = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=15m&limit=100"
         response_15m = requests.get(url_15m, timeout=10)
         if response_15m.status_code != 200: 
@@ -43,7 +41,6 @@ def analyze_strict_market(symbol):
             ema_4h = ta.ema(df_4h['close'], length=50)
             trend_4h = "Bullish" if df_4h['close'].iloc[-1] > ema_4h.iloc[-1] else "Bearish"
 
-        # حساب المؤشرات على فريم 15m
         df['RSI'] = ta.rsi(df['close'], length=14)
         bollinger = ta.bbands(df['close'], length=20, std=2.0)
         
@@ -54,7 +51,7 @@ def analyze_strict_market(symbol):
         df['BBL'] = bollinger[bbl_col]
         df['EMA'] = ta.ema(df['close'], length=50)
         df['ATR'] = ta.atr(df['high'], df['low'], df['close'], length=14)
-        df['Vol_SMA'] = ta.sma(df['volume'], length=20) # متوسط حجم التداول
+        df['Vol_SMA'] = ta.sma(df['volume'], length=20)
         
         last_rsi = df['RSI'].iloc[-1]
         last_bbu = df['BBU'].iloc[-1]
@@ -65,8 +62,6 @@ def analyze_strict_market(symbol):
         last_vol_sma = df['Vol_SMA'].iloc[-1]
         
         market_trend = "Bullish Trend" if current_price > last_ema else "Bearish Trend"
-        
-        # شروط صارمة مع فلتر حجم التداول (Volume Filter) واتجاه 4H
         is_volume_confirmed = last_vol > last_vol_sma * 0.9 
         
         if last_rsi < 40 and current_price <= last_bbl and trend_4h == "Bullish" and is_volume_confirmed:
@@ -91,29 +86,14 @@ def analyze_strict_market(symbol):
         print(f"Error analyzing {symbol}: {e}", flush=True)
         return None
 
-print("Strict Bot Started and Running with 4H & Volume Filters...", flush=True)
-send_telegram_message("🛡️ **Strict Bot Started** (Enhanced with 4H Trend & Volume Filter)")
+print("🛡️ Strict Bot Scan Started...", flush=True)
 
-while True:
-    try:
-        current_hour = datetime.datetime.now().hour
-        print(f"Current Hour: {current_hour}", flush=True)
-        
-        if current_hour % 2 == 0:
-            print("Strict Bot started scanning coins...", flush=True)
-            for symbol in watchlist:
-                print(f"Checking symbol: {symbol}", flush=True)
-                res = analyze_strict_market(symbol)
-                if res:
-                    print(f"Checked successfully {symbol} - Price: {res['price']:,.2f} - Status: {res['signal_status']}", flush=True)
-                    msg = f"🛡️ **Strict Signal**: {symbol}\n💰 Price: {res['price']:,.2f}\n📈 24h: {res['change_24h']:+.2f}%\n🌍 15m Trend: {res['market_trend']}\n🚀 4H Trend: {res['trend_4h']}\n🎯 Signal: {res['signal_status']}\n🎯 TP1: {res['tp1']:.3f}\n🎯 TP2: {res['tp2']:.3f}\n🛡️ SL: {res['sl']:.3f}\n📊 RSI: {res['rsi']:.1f} | ATR: {res['atr']:.2f}"
-                    send_telegram_message(msg)
-                time.sleep(4)
-            print("Finished current cycle, waiting for next round...", flush=True)
-            time.sleep(3000)
-        else:
-            print("Current hour is odd, Strict Bot is waiting...", flush=True)
-            time.sleep(300)
-    except Exception as e:
-        print(f"General Error in main loop: {e}", flush=True)
-        time.sleep(60)
+for symbol in watchlist:
+    print(f"Checking symbol: {symbol}", flush=True)
+    res = analyze_strict_market(symbol)
+    if res:
+        msg = f"🛡️ **Strict Signal**: {symbol}\n💰 Price: {res['price']:,.2f}\n📈 24h: {res['change_24h']:+.2f}%\n🌍 15m Trend: {res['market_trend']}\n🚀 4H Trend: {res['trend_4h']}\n🎯 Signal: {res['signal_status']}\n🎯 TP1: {res['tp1']:.3f}\n🎯 TP2: {res['tp2']:.3f}\n🛡️ SL: {res['sl']:.3f}\n📊 RSI: {res['rsi']:.1f} | ATR: {res['atr']:.2f}"
+        send_telegram_message(msg)
+    time.sleep(3)
+
+print("🛡️ Strict Bot Scan Finished.", flush=True)
