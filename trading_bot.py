@@ -6,6 +6,11 @@ import pandas_ta as ta
 TELEGRAM_BOT_TOKEN = "8935193100:AAGGIvDsapewUqGO-Z0Faas46D0VNgGkQKo"
 TELEGRAM_CHAT_ID = "5620413191"
 
+# إعدادات إدارة رأس المال والمخاطر برأس مال صغير ورافعة آمنة
+ACCOUNT_BALANCE = 200.0   # رأس المال الافتراضي (يمكنك تعديله لاحقاً حسب محفظتك الحقيقية)
+RISK_PERCENTAGE = 0.02    # نسبة المخاطرة لكل صفقة (2%)
+LEVERAGE = 3              # رافعة مالية منخفضة وآمنة (3x)
+
 def send_telegram_message(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "Markdown"}
@@ -29,18 +34,11 @@ def get_binance_klines(symbol, interval, limit=100):
         return None
 
 def run_strict_bot():
-    print("🛡️ Ultimate Strict Bot Scan (EMA + BB + RSI + Vol + ATR + ADX + MFI)...")
+    print("🛡️ Ultimate Strict Bot Scan (Safe Leverage & Risk Mgt)...")
     
-    # القائمة المحدثة: نخبة العملات الموثوقة وذات السيولة العالية (بدون SUI)
     symbols = [
-        "BTCUSDT",
-        "ETHUSDT",
-        "SOLUSDT",
-        "BNBUSDT",
-        "XRPUSDT",
-        "ADAUSDT",
-        "LINKUSDT",
-        "AVAXUSDT"
+        "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT",
+        "XRPUSDT", "ADAUSDT", "LINKUSDT", "AVAXUSDT"
     ]
     
     for symbol in symbols:
@@ -86,6 +84,13 @@ def run_strict_bot():
             tp2 = current_price + (current_atr * 3.0)
             sl = current_price - (current_atr * 1.5)
             
+            # حساب المخاطر والهامش مع الرافعة المالية
+            risk_amount = ACCOUNT_BALANCE * RISK_PERCENTAGE
+            risk_per_unit = current_price - sl
+            position_size = risk_amount / risk_per_unit if risk_per_unit > 0 else 0
+            position_value = position_size * current_price
+            margin_required = position_value / LEVERAGE
+            
             message = (
                 f"🛡️ *Elite Strict Signal: {symbol}*\n"
                 f"💰 Price: {current_price}\n"
@@ -94,6 +99,10 @@ def run_strict_bot():
                 f"🎯 TP1: {tp1:.3f}\n"
                 f"🎯 TP2: {tp2:.3f}\n"
                 f"🛑 SL: {sl:.3f}\n"
+                f"⚖️ *Risk Mgt & Leverage ({LEVERAGE}x):*\n"
+                f"• Suggested Qty: `{position_size:.4f}`\n"
+                f"• Position Value: `${position_value:.2f}`\n"
+                f"• Margin Required: `${margin_required:.2f}`\n"
                 f"📊 RSI: {current_rsi:.1f} | MFI: {current_mfi:.1f} | ATR: {current_atr:.2f}"
             )
             send_telegram_message(message)
