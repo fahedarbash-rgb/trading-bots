@@ -1,15 +1,15 @@
 import requests
 import pandas as pd
-import pandas_ta as ta
+import numpy as np
 
-# مفاتيح التيليجرام الخاصة بك مباشرة
+# مفاتيح التيليجرام الخاصة بك
 TELEGRAM_BOT_TOKEN = "8935193100:AAGGIvDsapewUqGO-Z0Faas46D0VNgGkQKo"
 TELEGRAM_CHAT_ID = "5620413191"
 
 # إعدادات إدارة رأس المال والمخاطر برأس مال صغير ورافعة آمنة
-ACCOUNT_BALANCE = 200.0   # رأس المال الافتراضي
-RISK_PERCENTAGE = 0.02    # نسبة المخاطرة لكل صفقة (2%)
-LEVERAGE = 3              # رافعة مالية منخفضة وآمنة (3x)
+ACCOUNT_BALANCE = 200.0   
+RISK_PERCENTAGE = 0.02    
+LEVERAGE = 3              
 
 def send_telegram_message(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -33,8 +33,26 @@ def get_binance_klines(symbol, interval, limit=100):
     except Exception as e:
         return None
 
+# دوال حساب المؤشرات الفنية يدوياً باستخدام Pandas و Numpy بدقة تامة
+def calculate_rsi(series, period=14):
+    delta = series.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    rs = gain / loss
+    return 100 - (100 / (1 + rs))
+
+def calculate_ema(series, period):
+    return series.ewm(span=period, adjust=False).mean()
+
+def calculate_atr(df, period=14):
+    high_low = df['high'] - df['low']
+    high_close = np.abs(df['high'] - df['close'].shift())
+    low_close = np.abs(df['low'] - df['close'].shift())
+    tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+    return tr.rolling(window=period).mean()
+
 def run_flexible_bot():
-    print("⚡ Flexible Bot Scan Started (Safe Leverage & Risk Mgt)...")
+    print("⚡ Flexible Bot Scan Started (Pure Pandas & All Indicators)...")
     
     symbols = [
         "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT",
@@ -47,10 +65,11 @@ def run_flexible_bot():
         if df is None or len(df) < 50:
             continue
             
-        df['rsi'] = ta.rsi(df['close'], length=14)
-        df['atr'] = ta.atr(df['high'], df['low'], df['close'], length=14)
-        df['ema_fast'] = ta.ema(df['close'], length=20)
-        df['ema_slow'] = ta.ema(df['close'], length=50)
+        # حساب المؤشرات الفنية بدقة
+        df['rsi'] = calculate_rsi(df['close'], 14)
+        df['atr'] = calculate_atr(df, 14)
+        df['ema_fast'] = calculate_ema(df['close'], 20)
+        df['ema_slow'] = calculate_ema(df['close'], 50)
         
         current_price = df['close'].iloc[-1]
         current_rsi = df['rsi'].iloc[-1]
@@ -66,7 +85,7 @@ def run_flexible_bot():
             tp2 = current_price + (current_atr * 2.5)
             sl = current_price - (current_atr * 1.2)
             
-            # حساب المخاطر والهامش مع الرافعة المالية
+            # حساب المخاطر والهامش مع الرافعة المالية الآمنة
             risk_amount = ACCOUNT_BALANCE * RISK_PERCENTAGE
             risk_per_unit = current_price - sl
             position_size = risk_amount / risk_per_unit if risk_per_unit > 0 else 0
@@ -77,7 +96,7 @@ def run_flexible_bot():
                 f"⚡ *Flexible Signal: {symbol}*\n"
                 f"💰 Price: {current_price}\n"
                 f"📈 Trend (1H): Fast Bullish 🟢\n"
-                f"🎯 Signal: FLEXIBLE BUY (Fast Momentum)\n"
+                f"🎯 Signal: FLEXIBLE BUY (Pure Pandas)\n"
                 f"🎯 TP1: {tp1:.3f}\n"
                 f"🎯 TP2: {tp2:.3f}\n"
                 f"🛑 SL: {sl:.3f}\n"
