@@ -1,9 +1,8 @@
 import datetime
-import time
 import requests
-import numpy as np
 import pandas as pd
 import pandas_ta as ta
+import time
 
 TELEGRAM_BOT_TOKEN = "8935193100:AAGGIvDsapewUqGO-Z0Faas46D0VNgGkQKo"
 TELEGRAM_CHAT_ID = "5620413191"
@@ -87,29 +86,14 @@ def analyze_flexible_market(symbol):
         print(f"Error analyzing {symbol}: {e}", flush=True)
         return None
 
-print("⚡ Flexible Bot Started and Running with 1H & Volume Filters...", flush=True)
-send_telegram_message("⚡ **Flexible Bot Started** (Enhanced with 1H Trend & Volume Filter)")
+print("⚡ Flexible Bot Scan Started...", flush=True)
 
-while True:
-    try:
-        current_hour = datetime.datetime.now().hour
-        print(f"Current Hour: {current_hour}", flush=True)
-        
-        if current_hour % 2 != 0:
-            print("⚡ Flexible Bot started scanning coins...", flush=True)
-            for symbol in watchlist:
-                print(f"Checking symbol: {symbol}", flush=True)
-                res = analyze_flexible_market(symbol)
-                if res:
-                    print(f"Checked successfully {symbol} - Price: {res['price']:,.2f} - Status: {res['signal_status']}", flush=True)
-                    msg = f"⚡ **Flexible Signal**: {symbol}\n💰 Price: {res['price']:,.2f}\n📈 24h: {res['change_24h']:+.2f}%\n🌍 15m Trend: {res['market_trend']}\n🚀 1H Trend: {res['trend_1h']}\n🎯 Signal: {res['signal_status']}\n🎯 TP1: {res['tp1']:.3f}\n🎯 TP2: {res['tp2']:.3f}\n🛡️ SL: {res['sl']:.3f}\n📊 RSI: {res['rsi']:.1f} | ATR: {res['atr']:.2f}"
-                    send_telegram_message(msg)
-                time.sleep(4)
-            print("Finished current cycle, waiting for next round...", flush=True)
-            time.sleep(3000)
-        else:
-            print("Current hour is even, Flexible Bot is waiting...", flush=True)
-            time.sleep(300)
-    except Exception as e:
-        print(f"General Error in main loop: {e}", flush=True)
-        time.sleep(60)
+for symbol in watchlist:
+    print(f"Checking symbol: {symbol}", flush=True)
+    res = analyze_flexible_market(symbol)
+    if res:
+        msg = f"⚡ **Flexible Signal**: {symbol}\n💰 Price: {res['price']:,.2f}\n📈 24h: {res['change_24h']:+.2f}%\n🌍 15m Trend: {res['market_trend']}\n🚀 1H Trend: {res['trend_1h']}\n🎯 Signal: {res['signal_status']}\n🎯 TP1: {res['tp1']:.3f}\n🎯 TP2: {res['tp2']:.3f}\n🛡️ SL: {res['sl']:.3f}\n📊 RSI: {res['rsi']:.1f} | ATR: {res['atr']:.2f}"
+        send_telegram_message(msg)
+    time.sleep(3)
+
+print("⚡ Flexible Bot Scan Finished.", flush=True)
