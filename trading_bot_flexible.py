@@ -30,7 +30,18 @@ def get_binance_klines(symbol, interval, limit=100):
 
 def run_flexible_bot():
     print("⚡ Flexible Bot Scan Started (Fast 1H Trend & Momentum)...")
-    symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "SUIUSDT", "ADAUSDT", "AVAXUSDT", "LINKUSDT"]
+    
+    # القائمة المحدثة: نخبة العملات الموثوقة وذات السيولة العالية (بدون SUI)
+    symbols = [
+        "BTCUSDT",
+        "ETHUSDT",
+        "SOLUSDT",
+        "BNBUSDT",
+        "XRPUSDT",
+        "ADAUSDT",
+        "LINKUSDT",
+        "AVAXUSDT"
+    ]
     
     for symbol in symbols:
         df = get_binance_klines(symbol, "1h", limit=100)
