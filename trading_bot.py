@@ -1,6 +1,7 @@
 import requests
 import pandas as pd
 import numpy as np
+from datetime import datetime
 
 # مفاتيح التيليجرام الخاصة بك
 TELEGRAM_BOT_TOKEN = "8935193100:AAGGIvDsapewUqGO-Z0Faas46D0VNgGkQKo"
@@ -33,7 +34,6 @@ def get_binance_klines(symbol, interval, limit=100):
     except Exception as e:
         return None
 
-# دوال حساب المؤشرات الفنية يدوياً باستخدام Pandas و Numpy بدقة تامة
 def calculate_rsi(series, period=14):
     delta = series.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
@@ -63,10 +63,8 @@ def calculate_adx(df, period=14):
     alpha = 1 / period
     high_diff = df['high'].diff()
     low_diff = -df['low'].diff()
-    
     pos_dm = np.where((high_diff > low_diff) & (high_diff > 0), high_diff, 0.0)
     neg_dm = np.where((low_diff > high_diff) & (low_diff > 0), low_diff, 0.0)
-    
     atr14 = calculate_atr(df, period)
     plus_di = 100 * pd.Series(pos_dm).ewm(alpha=alpha, adjust=False).mean() / atr14
     minus_di = 100 * pd.Series(neg_dm).ewm(alpha=alpha, adjust=False).mean() / atr14
@@ -74,12 +72,16 @@ def calculate_adx(df, period=14):
     return dx.ewm(alpha=alpha, adjust=False).mean()
 
 def run_strict_bot():
-    print("🛡️ Ultimate Strict Bot Scan (All Indicators Restored)...")
+    print("🛡️ Ultimate Strict Bot Scan (Expanded Coins & Advanced Logs)...")
     
+    # قائمة العملات الموسعة (القديمة + الجديدة)
     symbols = [
         "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT",
-        "XRPUSDT", "ADAUSDT", "LINKUSDT", "AVAXUSDT"
+        "XRPUSDT", "ADAUSDT", "LINKUSDT", "AVAXUSDT",
+        "DOTUSDT", "NEARUSDT", "MATICUSDT"
     ]
+    
+    scan_results = []
     
     for symbol in symbols:
         df_4h = get_binance_klines(symbol, "4h", limit=100)
@@ -88,14 +90,12 @@ def run_strict_bot():
         if df_4h is None or df_1h is None or len(df_4h) < 50 or len(df_1h) < 50:
             continue
             
-        # حساب المؤشرات الفنية كاملة
         df_1h['rsi'] = calculate_rsi(df_1h['close'], 14)
         df_1h['mfi'] = calculate_mfi(df_1h, 14)
         df_1h['atr'] = calculate_atr(df_1h, 14)
         df_1h['adx'] = calculate_adx(df_1h, 14)
         df_1h['vol_sma'] = df_1h['volume'].rolling(window=20).mean()
         
-        # Bollinger Bands
         df_1h['sma20'] = df_1h['close'].rolling(window=20).mean()
         df_1h['std20'] = df_1h['close'].rolling(window=20).std()
         df_1h['BBL'] = df_1h['sma20'] - (2 * df_1h['std20'])
@@ -104,6 +104,9 @@ def run_strict_bot():
         is_bullish_4h = df_4h['close'].iloc[-1] > ema_4h.iloc[-1]
         
         current_price = df_1h['close'].iloc[-1]
+        prev_price = df_1h['close'].iloc[-2]
+        price_change_pct = ((current_price - prev_price) / prev_price) * 100
+        
         current_rsi = df_1h['rsi'].iloc[-1]
         current_mfi = df_1h['mfi'].iloc[-1]
         current_adx = df_1h['adx'].iloc[-1]
@@ -116,8 +119,9 @@ def run_strict_bot():
         volume_confirmed = current_vol > vol_sma
         strong_trend = current_adx > 22
         
-        # الشروط الاحترافية الكاملة للبوت الصارم
+        signal_status = "No Signal"
         if is_bullish_4h and strong_trend and (current_rsi < 38 or current_mfi < 35 or is_near_lower_band) and volume_confirmed:
+            signal_status = "STRONG BUY"
             tp1 = current_price + (current_atr * 1.5)
             tp2 = current_price + (current_atr * 3.0)
             sl = current_price - (current_atr * 1.5)
@@ -130,21 +134,35 @@ def run_strict_bot():
             
             message = (
                 f"🛡️ *Elite Strict Signal: {symbol}*\n"
-                f"💰 Price: {current_price}\n"
-                f"📈 Trend (4H): Bullish 🟢 | ADX: {current_adx:.1f}\n"
-                f"🎯 Signal: STRONG BUY (Pro Filters)\n"
-                f"🎯 TP1: {tp1:.3f}\n"
-                f"🎯 TP2: {tp2:.3f}\n"
-                f"🛑 SL: {sl:.3f}\n"
-                f"⚖️ *Risk Mgt & Leverage ({LEVERAGE}x):*\n"
+                f"💰 Price: `{current_price}` (Change: `{price_change_pct:+.2f}%`)\n"
+                f"📈 Trend (4H): Bullish 🟢 | ADX Strength: `{current_adx:.1f}`\n"
+                f"🎯 Signal Type: *STRONG BUY*\n"
+                f"🎯 TP1: `{tp1:.3f}` | TP2: `{tp2:.3f}`\n"
+                f"🛑 Stop Loss (SL): `{sl:.3f}`\n"
+                f"⚖️ *Risk & Leverage ({LEVERAGE}x):*\n"
                 f"• Suggested Qty: `{position_size:.4f}`\n"
                 f"• Position Value: `${position_value:.2f}`\n"
                 f"• Margin Required: `${margin_required:.2f}`\n"
-                f"📊 RSI: {current_rsi:.1f} | MFI: {current_mfi:.1f} | ATR: {current_atr:.2f}"
+                f"📊 RSI: `{current_rsi:.1f}` | MFI: `{current_mfi:.1f}` | ATR: `{current_atr:.2f}`"
             )
             send_telegram_message(message)
             
-    print("🛡️ Strict Bot Scan Finished.")
+        scan_results.append({
+            "Timestamp": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+            "Bot_Type": "Strict",
+            "Symbol": symbol,
+            "Price": current_price,
+            "Change_Pct": round(price_change_pct, 2),
+            "RSI": round(current_rsi, 1),
+            "MFI": round(current_mfi, 1),
+            "ADX": round(current_adx, 1),
+            "Signal": signal_status
+        })
+        
+    # حفظ النتائج في ملف السجل
+    log_df = pd.DataFrame(scan_results)
+    log_df.to_csv("bot_activity_log.csv", index=False)
+    print("🛡️ Strict Bot Scan Finished & Log Saved.")
 
 if __name__ == "__main__":
     run_strict_bot()
