@@ -30,7 +30,18 @@ def get_binance_klines(symbol, interval, limit=100):
 
 def run_strict_bot():
     print("🛡️ Ultimate Strict Bot Scan (EMA + BB + RSI + Vol + ATR + ADX + MFI)...")
-    symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "SUIUSDT", "ADAUSDT", "AVAXUSDT", "LINKUSDT"]
+    
+    # القائمة المحدثة: نخبة العملات الموثوقة وذات السيولة العالية (بدون SUI)
+    symbols = [
+        "BTCUSDT",
+        "ETHUSDT",
+        "SOLUSDT",
+        "BNBUSDT",
+        "XRPUSDT",
+        "ADAUSDT",
+        "LINKUSDT",
+        "AVAXUSDT"
+    ]
     
     for symbol in symbols:
         df_4h = get_binance_klines(symbol, "4h", limit=100)
