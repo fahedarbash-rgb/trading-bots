@@ -41,6 +41,7 @@ jobs:
       run: |
         git config --global user.name "github-actions[bot]"
         git config --global user.email "github-actions[bot]@users.noreply.github.com"
+        git pull origin main --rebase || true
         git add active_flexible_trades.csv active_strict_trades.csv flexible_balance.txt strict_balance.txt 2>/dev/null || true
         git diff --staged --quiet || git commit -m "Update both bots states and trades automatically"
-        git push
+        git push origin main
