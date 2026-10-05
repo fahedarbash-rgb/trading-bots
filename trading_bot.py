@@ -1,32 +1,14 @@
 import os
-import ccxt
 import requests
 import pandas as pd
 import numpy as np
 from datetime import datetime
-import yfinance as yf
-
-API_KEY = os.getenv('barOUYDIqwmkG0J2nRlEaDGxTcuevQD4vgLJOMfY0OlsHyqUDQq7PVKGyJCo2lgc')
-SECRET_KEY = os.getenv('7ZSWeyoZ6ZtrYmO60OHh2n1XQEgrQOuZuhWMNFEiRiXwJq3OZAoL2YXYlrr1feEy')
 
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', "8935193100:AAGGIvDsapewUqGO-Z0Faas46D0VNgGkQKo")
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', "5620413191")
 
 RISK_PERCENTAGE = 0.02    
 LEVERAGE = 3    
-
-# إعداد محفظة باينانس التجريبية
-exchange = ccxt.binance({
-    'apiKey': API_KEY,
-    'secret': SECRET_KEY,
-    'enableRateLimit': True,
-    'options': {'defaultType': 'future'}
-})
-
-try:
-    exchange.set_sandbox_mode(True)
-except Exception:
-    pass
 
 def send_telegram_message(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -37,49 +19,33 @@ def send_telegram_message(message):
     except Exception as e:
         print(f"Telegram Error: {e}")
 
-# خريطة الرموز المتوافقة مع Yahoo Finance
-YF_SYMBOLS = {
-    "BTC/USDT": "BTC-USD",
-    "ETH/USDT": "ETH-USD",
-    "SOL/USDT": "SOL-USD",
-    "BNB/USDT": "BNB-USD",
-    "XRP/USDT": "XRP-USD",
-    "ADA/USDT": "ADA-USD",
-    "LINK/USDT": "LINK-USD",
-    "AVAX/USDT": "AVAX-USD",
-    "DOT/USDT": "DOT-USD",
-    "NEAR/USDT": "NEAR-USD",
-    "MATIC/USDT": "MATIC-USD"
-}
+SYMBOLS = [
+    "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", 
+    "ADAUSDT", "LINKUSDT", "AVAXUSDT", "DOTUSDT", "NEARUSDT"
+]
 
-def get_market_data(symbol, period="5d", interval="1h"):
-    """جلب بيانات السوق عبر Yahoo Finance لضمان عدم الحظر واستقرار السيرفرات"""
-    yf_ticker = YF_SYMBOLS.get(symbol)
-    if not yf_ticker:
-        return None
+def get_binance_klines(symbol, interval="1h", limit=100):
+    """جلب بيانات الشموع عبر API العام المباشر لباينانس دون حظر"""
+    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
     try:
-        df = yf.download(yf_ticker, period=period, interval=interval, progress=False)
-        if df is None or len(df) < 30:
+        response = requests.get(url, timeout=10)
+        data = response.json()
+        if not isinstance(data, list):
             return None
-        
-        # تصحيح هيكل الأعمدة إذا كانت MultiIndex
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
             
-        df = df.rename(columns={
-            'Open': 'open',
-            'High': 'high',
-            'Low': 'low',
-            'Close': 'close',
-            'Volume': 'volume'
-        })
-        
-        for col in ['open', 'high', 'low', 'close', 'volume']:
-            df[col] = df[col].astype(float)
-            
-        return df
+        df_list = []
+        for item in data:
+            df_list.append({
+                'timestamp': item[0],
+                'open': float(item[1]),
+                'high': float(item[2]),
+                'low': float(item[3]),
+                'close': float(item[4]),
+                'volume': float(item[5])
+            })
+        return pd.DataFrame(df_list)
     except Exception as e:
-        print(f"Error fetching data for {symbol} via Yahoo Finance: {e}")
+        print(f"Error fetching {symbol}: {e}")
         return None
 
 def calculate_rsi(series, period=14):
@@ -120,23 +86,12 @@ def calculate_adx(df, period=14):
     return dx.ewm(alpha=alpha, adjust=False).mean()
 
 def run_strict_bot():
-    print("🛡 Ultimate Strict Bot Scan (Yahoo Finance Mode)...")
-    
-    try:
-        balance_info = exchange.fetch_balance()
-        account_balance = balance_info.get('USDT', {}).get('free', 200.0)
-        total_balance = balance_info.get('USDT', {}).get('total', 200.0)
-        if not account_balance: account_balance = 200.0
-        if not total_balance: total_balance = 200.0
-    except Exception:
-        account_balance = 200.0
-        total_balance = 200.0
-
-    symbols = list(YF_SYMBOLS.keys())
+    print("🛡 Ultimate Strict Bot Scan (Direct Public API Mode)...")
+    account_balance = 200.0
     scan_results = []
     
-    for symbol in symbols:
-        df_1h = get_market_data(symbol, period="5d", interval="1h")
+    for symbol in SYMBOLS:
+        df_1h = get_binance_klines(symbol, "1h", limit=100)
         
         if df_1h is None or len(df_1h) < 30:
             print(f"Skipping {symbol} due to data limits.")
@@ -146,7 +101,6 @@ def run_strict_bot():
         df_1h['mfi'] = calculate_mfi(df_1h, 14)
         df_1h['atr'] = calculate_atr(df_1h, 14)
         df_1h['adx'] = calculate_adx(df_1h, 14)
-        df_1h['vol_sma'] = df_1h['volume'].rolling(window=20).mean()
         
         df_1h['sma20'] = df_1h['close'].rolling(window=20).mean()
         df_1h['std20'] = df_1h['close'].rolling(window=20).std()
@@ -182,7 +136,7 @@ def run_strict_bot():
             margin_required = position_value / LEVERAGE
             
             message = (
-                f"🛡️ *Elite Signal (Yahoo Mode): {symbol}*\n"
+                f"🛡️ *Elite Signal: {symbol}*\n"
                 f"✅ *Market Scan & Analysis Successful*\n"
                 f"💰 Price: `{current_price}` (Change: `{price_change_pct:+.2f}%`)\n"
                 f"📈 Trend: Bullish 🟢 | ADX: `{current_adx:.1f}`\n"
@@ -193,14 +147,13 @@ def run_strict_bot():
                 f"• Qty: `{position_size:.4f}`\n"
                 f"• Position Value: `${position_value:.2f}`\n"
                 f"• Margin Required: `${margin_required:.2f}`\n"
-                f"💼 *Total Capital:* `${total_balance:.2f}` USDT\n"
+                f"💼 *Total Capital:* `${account_balance:.2f}` USDT\n"
                 f"📊 RSI: `{current_rsi:.1f}` | MFI: `{current_mfi:.1f}`"
             )
             send_telegram_message(message)
             
         scan_results.append({
             "Timestamp": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-            "Bot_Type": "Yahoo_Finance_Mode",
             "Symbol": symbol,
             "Price": current_price,
             "Change_Pct": round(price_change_pct, 2),
@@ -213,9 +166,9 @@ def run_strict_bot():
     log_df = pd.DataFrame(scan_results)
     log_df.to_csv("bot_activity_log.csv", index=False)
     
-    summary_msg = f"📊 *تقرير فحص السوق (عبر Yahoo Finance)*\nتم فحص جميع العملات بدقة واستقرار، الرصيد الحالي: `{total_balance:.2f} USDT`."
+    summary_msg = f"📊 *تقرير فحص السوق (مباشر)*\nتم فحص جميع العملات بنجاح، الرصيد الافتراضي: `{account_balance:.2f} USDT`."
     send_telegram_message(summary_msg)
-    print("🛡️ Scan Finished Successfully via Yahoo Finance.")
+    print("🛡️ Scan Finished Successfully.")
 
 if __name__ == "__main__":
     run_strict_bot()
