@@ -37,11 +37,6 @@ def send_telegram_message(message):
     except Exception as e:
         print(f"Error: {e}")
 
-# دالة اختبار إرسال رسالة فورية للتأكد من عمل التيليجرام
-def send_test_startup_message():
-    test_msg = "⚡ *CoreTech Flexible Bot:* تم ربط التيليجرام بنجاح وبدء فحص السوق الآلي!"
-    send_telegram_message(test_msg)
-
 def get_coinbase_candles(product_id, granularity=3600, limit=100):
     url = f"https://api.exchange.coinbase.com/products/{product_id}/candles?granularity={granularity}"
     headers = {"User-Agent": "Mozilla/5.0"}
@@ -141,9 +136,6 @@ def manage_flexible_paper_trades(current_prices):
 def run_flexible_bot():
     print("⚡ Flexible Bot Scan (Coinbase + Paper Trading Mode) Started...")
     
-    # إرسال رسالة تجريبية فورية للتحقق من الاتصال بالتيليجرام عند بدء التشغيل
-    send_test_startup_message()
-    
     balance_file = "flexible_balance.txt"
     if os.path.exists(balance_file):
         with open(balance_file, "r") as f:
@@ -219,7 +211,7 @@ def run_flexible_bot():
                     f"💰 Entry: `{current_price}` (Change: `{price_change_pct:+.2f}%`)\n"
                     f"🎯 TP1: `{tp1:.3f}` | TP2: `{tp2:.3f}`\n"
                     f"🛑 Stop Loss: `{sl:.3f}`\n"
-                    f"⚖️ *Risk & Leverage ({LEVERAGE}x):*\n"
+                    f"⚖️️ *Risk & Leverage ({LEVERAGE}x):*\n"
                     f"• Qty: `{position_size:.4f}`\n"
                     f"• Margin: `${margin_required:.2f}`\n"
                     f"💼 *Balance:* `${account_balance:.2f}` USDT\n"
