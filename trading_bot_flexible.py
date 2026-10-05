@@ -2,13 +2,13 @@ import os
 import requests
 import pandas as pd
 import numpy as np
-from datetime import datetime
+from datetime import datetime, timedelta
 
-# مفاتيح التيليجرام للبوت المرن الجديد
+# مفاتيح التيليجرام للبوت المرن المطور
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', "8678840548:AAFgx9th4C4lz-T3ThVwTEHr2uN-WOBmozo")
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', "5620413191")
 
-# إعدادات رأس المال والمخاطر للبوت المرن
+# إعدادات رأس المال والمخاطر
 INITIAL_BALANCE = 200.0    
 RISK_PERCENTAGE = 0.02    
 LEVERAGE = 3    
@@ -74,6 +74,14 @@ def calculate_rsi(series, period=14):
 def calculate_ema(series, period):
     return series.ewm(span=period, adjust=False).mean()
 
+def calculate_macd(series, fast=12, slow=26, signal=9):
+    exp1 = calculate_ema(series, fast)
+    exp2 = calculate_ema(series, slow)
+    macd_line = exp1 - exp2
+    signal_line = calculate_ema(macd_line, signal)
+    histogram = macd_line - signal_line
+    return macd_line, signal_line, histogram
+
 def calculate_atr(df, period=14):
     high_low = df['high'] - df['low']
     high_close = np.abs(df['high'] - df['close'].shift())
@@ -103,11 +111,20 @@ def manage_flexible_paper_trades(current_prices):
         symbol = row['Symbol']
         entry_price = row['Entry']
         tp1 = row['TP1']
+        tp2 = row['TP2']
         sl = row['SL']
         qty = row['Qty']
         
         if symbol in current_prices:
             curr_price = current_prices[symbol]
+            
+            # نظام وقف الخسارة المتحرك (Trailing Stop):
+            # إذا اقترب السعر من الهدف الأول، يتم رفع وقف الخسارة إلى سعر الدخول لحماية الصفقة
+            if curr_price >= (entry_price + (tp1 - entry_price) * 0.5) and sl < entry_price:
+                sl = entry_price
+                row['SL'] = sl
+                send_telegram_message(f"🔄 *Trailing Stop Activated! ({symbol})*\nStop Loss moved to Entry Price: `{sl:.3f}`")
+
             if curr_price >= tp1:
                 profit = (tp1 - entry_price) * qty
                 current_balance += profit
@@ -115,7 +132,7 @@ def manage_flexible_paper_trades(current_prices):
                 send_telegram_message(msg)
                 continue
             elif curr_price <= sl:
-                loss = (entry_price - sl) * qty
+                loss = (entry_price - sl) * qty if sl < entry_price else 0
                 current_balance -= loss
                 msg = f"🛑 *Flexible Stop Loss Hit! ({symbol})*\nLoss: `-${loss:.2f}`\nBalance: `${current_balance:.2f}`"
                 send_telegram_message(msg)
@@ -134,7 +151,7 @@ def manage_flexible_paper_trades(current_prices):
     return current_balance
 
 def run_flexible_bot():
-    print("⚡ Flexible Bot Scan (Coinbase + Paper Trading Mode) Started...")
+    print("⚡ Flexible Bot Scan (Advanced with MACD & Trailing Stop) Started...")
     
     balance_file = "flexible_balance.txt"
     if os.path.exists(balance_file):
@@ -163,6 +180,7 @@ def run_flexible_bot():
         df['atr'] = calculate_atr(df, 14)
         df['ema_fast'] = calculate_ema(df['close'], 20)
         df['ema_slow'] = calculate_ema(df['close'], 50)
+        df['macd'], df['macd_signal'], df['macd_hist'] = calculate_macd(df['close'])
         
         current_price = df['close'].iloc[-1]
         prev_price = df['close'].iloc[-2]
@@ -174,13 +192,15 @@ def run_flexible_bot():
         current_atr = df['atr'].iloc[-1] if not np.isnan(df['atr'].iloc[-1]) else (current_price * 0.01)
         ema_fast = df['ema_fast'].iloc[-1] if not np.isnan(df['ema_fast'].iloc[-1]) else current_price
         ema_slow = df['ema_slow'].iloc[-1] if not np.isnan(df['ema_slow'].iloc[-1]) else current_price
+        macd_hist = df['macd_hist'].iloc[-1] if not np.isnan(df['macd_hist'].iloc[-1]) else 0
         
         is_uptrend = ema_fast > ema_slow
         is_pullback = (current_rsi < 50) and (current_rsi > 35)
+        is_macd_positive = macd_hist > 0  # تأكيد الزخم الإيجابي عبر الـ MACD
         
         signal_status = "No Signal"
-        if is_uptrend and is_pullback:
-            signal_status = "FLEXIBLE BUY"
+        if is_uptrend and is_pullback and is_macd_positive:
+            signal_status = "FLEXIBLE BUY (Advanced)"
             tp1 = current_price + (current_atr * 1.2)
             tp2 = current_price + (current_atr * 2.5)
             sl = current_price - (current_atr * 1.2)
@@ -206,22 +226,22 @@ def run_flexible_bot():
                 })
 
                 message = (
-                    f"⚡ *Flexible Paper Trade: {symbol}*\n"
-                    f"🟢 *Position Opened (Testnet)*\n"
+                    f"⚡ *Advanced Flexible Trade: {symbol}*\n"
+                    f"🟢 *Position Opened (With MACD & Trailing)*\n"
                     f"💰 Entry: `{current_price}` (Change: `{price_change_pct:+.2f}%`)\n"
                     f"🎯 TP1: `{tp1:.3f}` | TP2: `{tp2:.3f}`\n"
-                    f"🛑 Stop Loss: `{sl:.3f}`\n"
-                    f"⚖️️ *Risk & Leverage ({LEVERAGE}x):*\n"
+                    f"🛑 Initial Stop Loss: `{sl:.3f}`\n"
+                    f"⚖ *Risk & Leverage ({LEVERAGE}x):*\n"
                     f"• Qty: `{position_size:.4f}`\n"
                     f"• Margin: `${margin_required:.2f}`\n"
                     f"💼 *Balance:* `${account_balance:.2f}` USDT\n"
-                    f"📊 RSI: `{current_rsi:.1f}`"
+                    f"📊 RSI: `{current_rsi:.1f}` | MACD Hist: `{macd_hist:.4f}`"
                 )
                 send_telegram_message(message)
             
         scan_results.append({
             "Timestamp": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-            "Bot_Type": "Flexible",
+            "Bot_Type": "Flexible_Advanced",
             "Symbol": symbol,
             "Price": current_price,
             "Change_Pct": round(price_change_pct, 2),
@@ -238,7 +258,7 @@ def run_flexible_bot():
 
     log_df = pd.DataFrame(scan_results)
     log_df.to_csv("bot_activity_log_flexible.csv", index=False)
-    print(f"⚡ Flexible Bot Scan Finished. Current Balance: ${account_balance:.2f}")
+    print(f"⚡ Advanced Flexible Bot Scan Finished. Current Balance: ${account_balance:.2f}")
 
 if __name__ == "__main__":
     run_flexible_bot()
