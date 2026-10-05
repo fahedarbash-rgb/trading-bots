@@ -37,6 +37,11 @@ def send_telegram_message(message):
     except Exception as e:
         print(f"Error: {e}")
 
+# دالة اختبار إرسال رسالة فورية للتأكد من عمل التيليجرام
+def send_test_startup_message():
+    test_msg = "⚡ *CoreTech Flexible Bot:* تم ربط التيليجرام بنجاح وبدء فحص السوق الآلي!"
+    send_telegram_message(test_msg)
+
 def get_coinbase_candles(product_id, granularity=3600, limit=100):
     url = f"https://api.exchange.coinbase.com/products/{product_id}/candles?granularity={granularity}"
     headers = {"User-Agent": "Mozilla/5.0"}
@@ -135,6 +140,9 @@ def manage_flexible_paper_trades(current_prices):
 
 def run_flexible_bot():
     print("⚡ Flexible Bot Scan (Coinbase + Paper Trading Mode) Started...")
+    
+    # إرسال رسالة تجريبية فورية للتحقق من الاتصال بالتيليجرام عند بدء التشغيل
+    send_test_startup_message()
     
     balance_file = "flexible_balance.txt"
     if os.path.exists(balance_file):
