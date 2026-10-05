@@ -5,7 +5,7 @@ import numpy as np
 from datetime import datetime, timedelta
 
 # مفاتيح التيليجرام للبوت الصارم المطور
-TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', "8678840548:AAFgx9th4C4lz-T3ThVwTEHr2uN-WOBmozo")
+TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', "8935193100:AAGGIvDsapewUqGO-Z0Faas46D0VNgGkQKo")
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', "5620413191")
 
 # إعدادات رأس المال والمخاطر
