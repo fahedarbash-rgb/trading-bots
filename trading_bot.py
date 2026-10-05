@@ -4,9 +4,10 @@ import requests
 import pandas as pd
 import numpy as np
 from datetime import datetime
+import yfinance as yf
 
-API_KEY = os.getenv('BINANCE_API_KEY')
-SECRET_KEY = os.getenv('BINANCE_SECRET_KEY')
+API_KEY = os.getenv('barOUYDIqwmkG0J2nRlEaDGxTcuevQD4vgLJOMfY0OlsHyqUDQq7PVKGyJCo2lgc')
+SECRET_KEY = os.getenv('7ZSWeyoZ6ZtrYmO60OHh2n1XQEgrQOuZuhWMNFEiRiXwJq3OZAoL2YXYlrr1feEy')
 
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', "8935193100:AAGGIvDsapewUqGO-Z0Faas46D0VNgGkQKo")
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', "5620413191")
@@ -14,7 +15,7 @@ TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', "5620413191")
 RISK_PERCENTAGE = 0.02    
 LEVERAGE = 3    
 
-# ربط الحساب التجريبي لتنفيذ الصفقات
+# إعداد محفظة باينانس التجريبية
 exchange = ccxt.binance({
     'apiKey': API_KEY,
     'secret': SECRET_KEY,
@@ -36,55 +37,49 @@ def send_telegram_message(message):
     except Exception as e:
         print(f"Telegram Error: {e}")
 
-# خريطة أسماء العملات في CoinCap العالمية المفتوحة
-COINCAP_IDS = {
-    "BTC/USDT": "bitcoin",
-    "ETH/USDT": "ethereum",
-    "SOL/USDT": "solana",
-    "BNB/USDT": "binance-coin",
-    "XRP/USDT": "xrp",
-    "ADA/USDT": "cardano",
-    "LINK/USDT": "chainlink",
-    "AVAX/USDT": "avalanche",
-    "DOT/USDT": "polkadot",
-    "NEAR/USDT": "near-protocol",
-    "MATIC/USDT": "polygon"
+# خريطة الرموز المتوافقة مع Yahoo Finance
+YF_SYMBOLS = {
+    "BTC/USDT": "BTC-USD",
+    "ETH/USDT": "ETH-USD",
+    "SOL/USDT": "SOL-USD",
+    "BNB/USDT": "BNB-USD",
+    "XRP/USDT": "XRP-USD",
+    "ADA/USDT": "ADA-USD",
+    "LINK/USDT": "LINK-USD",
+    "AVAX/USDT": "AVAX-USD",
+    "DOT/USDT": "DOT-USD",
+    "NEAR/USDT": "NEAR-USD",
+    "MATIC/USDT": "MATIC-USD"
 }
 
-def get_coincap_klines(symbol, interval="h1", limit=100):
-    """جلب بيانات الشموع عبر CoinCap البديلة التي لا تفرض أي حظر جغرافي على خوادم GitHub"""
-    asset_id = COINCAP_IDS.get(symbol)
-    if not asset_id:
+def get_market_data(symbol, period="5d", interval="1h"):
+    """جلب بيانات السوق عبر Yahoo Finance لضمان عدم الحظر واستقرار السيرفرات"""
+    yf_ticker = YF_SYMBOLS.get(symbol)
+    if not yf_ticker:
         return None
-    
-    url = f"https://api.coincap.io/v2/assets/{asset_id}/history?interval={interval}"
     try:
-        response = requests.get(url, timeout=10)
-        data = response.json()
-        history = data.get("data", [])
-        if not history:
+        df = yf.download(yf_ticker, period=period, interval=interval, progress=False)
+        if df is None or len(df) < 30:
             return None
-            
-        # اخذ آخر عدد محدد من الشموع
-        history = history[-limit:]
         
-        df_list = []
-        for item in history:
-            price = float(item["priceUsd"])
-            # CoinCap يعطي السعر الزمني، سنبني DataFrame متوافق مع المؤشرات
-            df_list.append({
-                'timestamp': item["time"],
-                'open': price,
-                'high': price * 1.002,  # تقريب تقني للحفاظ على توافق المؤشرات
-                'low': price * 0.998,
-                'close': price,
-                'volume': 1000000.0
-            })
+        # تصحيح هيكل الأعمدة إذا كانت MultiIndex
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
             
-        df = pd.DataFrame(df_list)
+        df = df.rename(columns={
+            'Open': 'open',
+            'High': 'high',
+            'Low': 'low',
+            'Close': 'close',
+            'Volume': 'volume'
+        })
+        
+        for col in ['open', 'high', 'low', 'close', 'volume']:
+            df[col] = df[col].astype(float)
+            
         return df
     except Exception as e:
-        print(f"Error fetching data for {symbol}: {e}")
+        print(f"Error fetching data for {symbol} via Yahoo Finance: {e}")
         return None
 
 def calculate_rsi(series, period=14):
@@ -125,7 +120,7 @@ def calculate_adx(df, period=14):
     return dx.ewm(alpha=alpha, adjust=False).mean()
 
 def run_strict_bot():
-    print("🛡 Ultimate Strict Bot Scan (CoinCap Unrestricted Mode)...")
+    print("🛡 Ultimate Strict Bot Scan (Yahoo Finance Mode)...")
     
     try:
         balance_info = exchange.fetch_balance()
@@ -137,11 +132,11 @@ def run_strict_bot():
         account_balance = 200.0
         total_balance = 200.0
 
-    symbols = list(COINCAP_IDS.keys())
+    symbols = list(YF_SYMBOLS.keys())
     scan_results = []
     
     for symbol in symbols:
-        df_1h = get_coincap_klines(symbol, "h1", limit=100)
+        df_1h = get_market_data(symbol, period="5d", interval="1h")
         
         if df_1h is None or len(df_1h) < 30:
             print(f"Skipping {symbol} due to data limits.")
@@ -187,7 +182,7 @@ def run_strict_bot():
             margin_required = position_value / LEVERAGE
             
             message = (
-                f"🛡️ *Elite Signal (Unrestricted): {symbol}*\n"
+                f"🛡️ *Elite Signal (Yahoo Mode): {symbol}*\n"
                 f"✅ *Market Scan & Analysis Successful*\n"
                 f"💰 Price: `{current_price}` (Change: `{price_change_pct:+.2f}%`)\n"
                 f"📈 Trend: Bullish 🟢 | ADX: `{current_adx:.1f}`\n"
@@ -205,7 +200,7 @@ def run_strict_bot():
             
         scan_results.append({
             "Timestamp": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-            "Bot_Type": "Unrestricted_Mode",
+            "Bot_Type": "Yahoo_Finance_Mode",
             "Symbol": symbol,
             "Price": current_price,
             "Change_Pct": round(price_change_pct, 2),
@@ -218,9 +213,9 @@ def run_strict_bot():
     log_df = pd.DataFrame(scan_results)
     log_df.to_csv("bot_activity_log.csv", index=False)
     
-    summary_msg = f"📊 *تقرير فحص السوق (بدون حظر)*\nتم فحص العملات بنجاح عبر السيرفر السحابي، الرصيد الحالي: `{total_balance:.2f} USDT`."
+    summary_msg = f"📊 *تقرير فحص السوق (عبر Yahoo Finance)*\nتم فحص جميع العملات بدقة واستقرار، الرصيد الحالي: `{total_balance:.2f} USDT`."
     send_telegram_message(summary_msg)
-    print("🛡️ Scan Finished Successfully Without Restrictions.")
+    print("🛡️ Scan Finished Successfully via Yahoo Finance.")
 
 if __name__ == "__main__":
     run_strict_bot()
