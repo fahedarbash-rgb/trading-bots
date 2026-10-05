@@ -1,29 +1,33 @@
-name: Run Trading Bots
+name: Run Trading Bot
 
 on:
+  workflow_dispatch:
   schedule:
-    - cron: '0 * * * *'  # يعمل تلقائياً كل ساعة
-  workflow_dispatch:      # يتيح لك التشغيل اليدوي متى شئت من تبويب Actions
+    - cron: '0 * * * *' # يعمل كل ساعة تلقائياً أو عبر التشغيل اليدوي
 
 jobs:
-  run-bots:
+  build:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+    - name: Checkout code
+      uses: actions/checkout@v3
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
 
-      - name: Install dependencies
-        run: |
-          pip install --upgrade pip
-          pip install -r requirements.txt
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install ccxt pandas requests numpy
 
-      - name: Run Strict Bot
-        run: python trading_bot.py
-
-      - name: Run Flexible Bot
-        run: python trading_bot_flexible.py
+    - name: Run Strict Bot
+      env:
+        BINANCE_API_KEY: ${{ secrets.BINANCE_API_KEY }}
+        BINANCE_SECRET_KEY: ${{ secrets.BINANCE_SECRET_KEY }}
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      run: |
+        python trading_bot.py
