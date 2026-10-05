@@ -40,17 +40,24 @@ def send_telegram_message(message):
         print(f"Telegram Error: {e}")
 
 def get_binance_klines(symbol, interval, limit=100):
-    url = f"https://testnet.binancefuture.com/fapi/v1/klines?symbol={symbol.replace('/', '')}&interval={interval}&limit={limit}"
+    # استخدام الرابط العام العالمي المفتوح للأسعار بدلاً من Testnet الخاص بالمنطقة المحظورة
+    formatted_symbol = symbol.replace('/', '')
+    url = f"https://api.binance.com/api/v3/klines?symbol={formatted_symbol}&interval={interval}&limit={limit}"
     try:
         response = requests.get(url)
         data = response.json()
-        df = pd.DataFrame(data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'close_time', 'qav', 'not', 'tbav', 'tbqav', 'ignore'])
-        df['close'] = df['close'].astype(float)
-        df['high'] = df['high'].astype(float)
-        df['low'] = df['low'].astype(float)
-        df['volume'] = df['volume'].astype(float)
-        return df
+        if isinstance(data, list):
+            df = pd.DataFrame(data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'close_time', 'qav', 'not', 'tbav', 'tbqav', 'ignore'])
+            df['close'] = df['close'].astype(float)
+            df['high'] = df['high'].astype(float)
+            df['low'] = df['low'].astype(float)
+            df['volume'] = df['volume'].astype(float)
+            return df
+        else:
+            print(f"API Error for {symbol}: {data}")
+            return None
     except Exception as e:
+        print(f"Error fetching klines for {symbol}: {e}")
         return None
 
 def calculate_rsi(series, period=14):
