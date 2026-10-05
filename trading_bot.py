@@ -19,34 +19,46 @@ def send_telegram_message(message):
     except Exception as e:
         print(f"Telegram Error: {e}")
 
-SYMBOLS = [
-    "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", 
-    "ADAUSDT", "LINKUSDT", "AVAXUSDT", "DOTUSDT", "NEARUSDT"
-]
+# خريطة الرموز المتوافقة مع Coinbase API
+COINBASE_PRODUCTS = {
+    "BTCUSDT": "BTC-USD",
+    "ETHUSDT": "ETH-USD",
+    "SOLUSDT": "SOL-USD",
+    "BNBUSDT": "BNB-USD",
+    "XRPUSDT": "XRP-USD",
+    "ADAUSDT": "ADA-USD",
+    "LINKUSDT": "LINK-USD",
+    "AVAXUSDT": "AVAX-USD",
+    "DOTUSDT": "DOT-USD",
+    "NEARUSDT": "NEAR-USD"
+}
 
-def get_binance_klines(symbol, interval="1h", limit=120):
-    """جلب بيانات الشموع بدقة من باينانس"""
-    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
+def get_coinbase_candles(product_id):
+    """جلب بيانات الشموع من Coinbase API المفتوح عالمياً بدون قيود جغرافية"""
+    url = f"https://api.exchange.coinbase.com/products/{product_id}/candles?granularity=3600"
+    headers = {"User-Agent": "Mozilla/5.0"}
     try:
-        response = requests.get(url, timeout=10)
+        response = requests.get(url, headers=headers, timeout=10)
         data = response.json()
         if not isinstance(data, list) or len(data) == 0:
-            print(f"Warning: No data returned for {symbol}, response: {data}")
+            print(f"Warning: No data returned for {product_id}, response: {data}")
             return None
             
+        # Coinbase format: [ time, low, high, open, close, volume ]
         df_list = []
-        for item in data:
+        # ترتيب البيانات تصاعدياً حسب الوقت
+        for item in reversed(data):
             df_list.append({
-                'timestamp': item[0],
-                'open': float(item[1]),
+                'timestamp': item[0] * 1000,
+                'open': float(item[3]),
                 'high': float(item[2]),
-                'low': float(item[3]),
+                'low': float(item[1]),
                 'close': float(item[4]),
                 'volume': float(item[5])
             })
         return pd.DataFrame(df_list)
     except Exception as e:
-        print(f"Error fetching {symbol}: {e}")
+        print(f"Error fetching {product_id}: {e}")
         return None
 
 def calculate_rsi(series, period=14):
@@ -87,15 +99,15 @@ def calculate_adx(df, period=14):
     return dx.ewm(alpha=alpha, adjust=False).mean()
 
 def run_strict_bot():
-    print("🛡 Ultimate Strict Bot Scan (Optimized Mode)...")
+    print("🛡 Ultimate Strict Bot Scan (Coinbase Global API Mode)...")
     account_balance = 200.0
     scan_results = []
     
-    for symbol in SYMBOLS:
-        df_1h = get_binance_klines(symbol, "1h", limit=120)
+    for symbol, cb_product in COINBASE_PRODUCTS.items():
+        df_1h = get_coinbase_candles(cb_product)
         
         if df_1h is None or len(df_1h) < 20:
-            print(f"Skipping {symbol} due to insufficient data length ({len(df_1h) if df_1h is not None else 0}).")
+            print(f"Skipping {symbol} due to insufficient data length.")
             continue
             
         df_1h['rsi'] = calculate_rsi(df_1h['close'], 14)
@@ -121,10 +133,9 @@ def run_strict_bot():
         bbl = df_1h['BBL'].iloc[-1] if not np.isnan(df_1h['BBL'].iloc[-1]) else current_price * 0.98
         
         is_near_lower_band = current_price <= (bbl * 1.01)
-        strong_trend = current_adx > 15  # تخفيف طفيف لضمان التقاط الاتجاهات بدقة
+        strong_trend = current_adx > 15
         
         signal_status = "No Signal"
-        # شروط مرنة وقوية لالتقاط الفرص المتاحة
         if is_bullish and (current_rsi < 45 or current_mfi < 40 or is_near_lower_band):
             signal_status = "STRONG BUY"
             tp1 = current_price + (current_atr * 1.5)
@@ -139,7 +150,7 @@ def run_strict_bot():
             
             message = (
                 f"🛡️ *Elite Signal: {symbol}*\n"
-                f"✅ *Market Scan Successful*\n"
+                f"✅ *Market Scan Successful (Coinbase)*\n"
                 f"💰 Price: `{current_price}` (Change: `{price_change_pct:+.2f}%`)\n"
                 f"📈 Trend: Bullish 🟢 | ADX: `{current_adx:.1f}`\n"
                 f"🎯 Signal Type: *STRONG BUY*\n"
@@ -168,7 +179,7 @@ def run_strict_bot():
     log_df = pd.DataFrame(scan_results)
     log_df.to_csv("bot_activity_log.csv", index=False)
     
-    summary_msg = f"📊 *تقرير فحص السوق المحدث*\nتم فحص جميع العملات الرقمية بنجاح تام واستخراج النتائج، الرصيد الافتراضي: `{account_balance:.2f} USDT`."
+    summary_msg = f"📊 *تقرير فحص السوق (عبر Coinbase)*\nتم جلب البيانات وفحص جميع العملات بنجاح تام متجاوزين قيود المواقع الجغرافية، الرصيد الافتراضي: `{account_balance:.2f} USDT`."
     send_telegram_message(summary_msg)
     print("🛡️ Scan Finished Successfully.")
 
