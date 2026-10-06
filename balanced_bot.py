@@ -21,7 +21,7 @@ RISK_PER_TRADE = 0.02         # نسبة المخاطرة لكل صفقة (2%)
 # --- إعدادات تيليجرام ---
 TELEGRAM_BOT_TOKEN = "8772493944:AAGb4Y1VuBLrCq0vfvnhue7oRW4hjf_LYJE"
 # يمكنك وضع معرف الدردشة (Chat ID) في متغيرات البيئة GitHub Secrets باسم TELEGRAM_CHAT_ID
-TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', '')
+TELEGRAM_CHAT_ID = os.getenv('5620413191', '')
 
 # --- سلة العملات المعتمدة (صيغة كوينبيس وبشكل عام) ---
 SYMBOLS = [
