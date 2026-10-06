@@ -20,10 +20,9 @@ RISK_PER_TRADE = 0.02         # نسبة المخاطرة لكل صفقة (2%)
 
 # --- إعدادات تيليجرام ---
 TELEGRAM_BOT_TOKEN = "8772493944:AAGb4Y1VuBLrCq0vfvnhue7oRW4hjf_LYJE"
-# يمكنك وضع معرف الدردشة (Chat ID) في متغيرات البيئة GitHub Secrets باسم TELEGRAM_CHAT_ID
-TELEGRAM_CHAT_ID = os.getenv('5620413191', '')
+TELEGRAM_CHAT_ID = "5620413191"
 
-# --- سلة العملات المعتمدة (صيغة كوينبيس وبشكل عام) ---
+# --- سلة العملات المعتمدة (صيغة كوينبيس لتفادي حظر بينانس) ---
 SYMBOLS = [
     "BTC-USD", 
     "ETH-USD", 
@@ -73,9 +72,7 @@ def fetch_coinbase_historical_data(product_id, granularity=3600, limit=100):
         response = requests.get(url, params=params, headers=headers, timeout=10)
         if response.status_code == 200:
             data = response.json()
-            # كوينبيس تعيد البيانات كالتالي: [time, low, high, open, close, volume]
             df = pd.DataFrame(data, columns=['timestamp', 'low', 'high', 'open', 'close', 'volume'])
-            # ترتيب البيانات من القديم إلى الجديد
             df = df.sort_values('timestamp').reset_index(drop=True)
             
             df['open'] = df['open'].astype(float)
@@ -84,7 +81,6 @@ def fetch_coinbase_historical_data(product_id, granularity=3600, limit=100):
             df['close'] = df['close'].astype(float)
             df['volume'] = df['volume'].astype(float)
             
-            # اقتطاع العدد المطلوب فقط
             return df.tail(limit).reset_index(drop=True)
         else:
             logging.error(f"خطأ من كوينبيس لـ {product_id}: {response.text}")
@@ -125,7 +121,6 @@ def execute_balanced_strategy():
     for product_id in SYMBOLS:
         binance_symbol = product_id.replace("-", "") # تحويل BTC-USD إلى BTCUSDT لتنفيذه في بينانس
         try:
-            # 1. التحقق من وجود صفقات مفتوحة لنفس العملة لمنع التداخل
             positions = client.futures_position_information(symbol=binance_symbol)
             active_position = [p for p in positions if float(p['positionAmt']) != 0.0]
             
@@ -133,7 +128,6 @@ def execute_balanced_strategy():
                 logging.info(f"العملة {binance_symbol} لديها صفقة مفتوحة بالفعل. تخطي...")
                 continue
 
-            # 2. جلب البيانات من كوينبيس وحساب المؤشرات
             df = fetch_coinbase_historical_data(product_id)
             if df is None or len(df) < 30:
                 continue
@@ -144,7 +138,7 @@ def execute_balanced_strategy():
             
             support, resistance, bullish_fvg, bearish_fvg = detect_support_resistance_and_fvg(df)
 
-            # 3. شروط صفقة شراء (Long)
+            # صفقة شراء (Long)
             is_near_support = abs(current_price - support) <= (current_atr * 1.5)
             if is_near_support or bullish_fvg:
                 side = "BUY"
@@ -158,10 +152,9 @@ def execute_balanced_strategy():
                 msg = f"🟢 *فرصة LONG جديدة ({binance_symbol})*\n- السعر: `{entry_price}`\n- وقف الخسارة SL: `{sl_price}`\n- الأهداف: `TP1: {tp1}` | `TP2: {tp2}` | `TP3: {tp3}`"
                 logging.info(msg)
                 send_telegram_message(msg)
-                # تنفيذ الأمر عبر بينانس
                 place_futures_order(client, binance_symbol, side, entry_price, sl_price, [tp1, tp2, tp3])
 
-            # 4. شروط صفقة بيع (Short)
+            # صفقة بيع (Short)
             is_near_resistance = abs(current_price - resistance) <= (current_atr * 1.5)
             if is_near_resistance or bearish_fvg:
                 side = "SELL"
@@ -175,7 +168,6 @@ def execute_balanced_strategy():
                 msg = f"🔴 *فرصة SHORT جديدة ({binance_symbol})*\n- السعر: `{entry_price}`\n- وقف الخسارة SL: `{sl_price}`\n- الأهداف: `TP1: {tp1}` | `TP2: {tp2}` | `TP3: {tp3}`"
                 logging.info(msg)
                 send_telegram_message(msg)
-                # تنفيذ الأمر عبر بينانس
                 place_futures_order(client, binance_symbol, side, entry_price, sl_price, [tp1, tp2, tp3])
 
         except Exception as e:
