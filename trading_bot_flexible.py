@@ -1,8 +1,16 @@
 import os
+import logging
 import requests
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
+
+# --- إعداد نظام تسجيل الأخطاء (Error Logging) ---
+logging.basicConfig(
+    filename='bot_errors.log',
+    level=logging.ERROR,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
 
 # مفاتيح التيليجرام للبوت المرن (Mean Reversion)
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', "8678840548:AAFgx9th4C4lz-T3ThVwTEHr2uN-WOBmozo")
@@ -13,6 +21,12 @@ INITIAL_BALANCE = 200.0
 RISK_PERCENTAGE = 0.02     
 LEVERAGE = 3     
 MAX_TOTAL_MARGIN_RATIO = 0.6  # أقصى نسبة مسموح بها من الرصيد كإجمالي هوامش مفتوحة (60%)
+
+# --- ملفات السجلات والأرشيف الخاصة بالبوت المرن ---
+TRADE_FILE = "active_flexible_trades.csv"
+BALANCE_FILE = "flexible_balance.txt"
+CLOSED_FILE = "closed_flexible_trades_history.csv"
+HEARTBEAT_FILE = "last_flexible_heartbeat.txt"
 
 # خريطة الرموز للتوافق مع Coinbase API
 COINBASE_PRODUCTS = {
@@ -33,10 +47,44 @@ def send_telegram_message(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "Markdown"}
     try:
-        response = requests.post(url, json=payload)
+        response = requests.post(url, json=payload, timeout=10)
         print(f"Telegram Response: {response.status_code}")
     except Exception as e:
-        print(f"Error: {e}")
+        error_msg = f"Telegram Error: {e}"
+        print(error_msg)
+        logging.error(error_msg)
+
+def check_heartbeat():
+    """إرسال نبضة قلب دورية (كل 24 ساعة) لتأكيد أن البوت المرن يعمل بانتظام"""
+    now = datetime.utcnow()
+    send_hb = False
+    if os.path.exists(HEARTBEAT_FILE):
+        try:
+            with open(HEARTBEAT_FILE, "r") as f:
+                last_time = datetime.fromisoformat(f.read().strip())
+                if (now - last_time) >= timedelta(hours=24):
+                    send_hb = True
+        except Exception:
+            send_hb = True
+    else:
+        send_hb = True
+
+    if send_hb:
+        send_telegram_message("💓 *Flexible Bot Heartbeat:* البوت المرن يعمل بشكل سليم ومستقر ومتصل بنجاح.")
+        try:
+            with open(HEARTBEAT_FILE, "w") as f:
+                f.write(now.isoformat())
+        except Exception as e:
+            logging.error(f"Error writing heartbeat file: {e}")
+
+def save_closed_trade(trade_data):
+    """حفظ تفاصيل الصفقة المغلقة في أرشيف مستقل لتحليل الأداء"""
+    file_exists = os.path.exists(CLOSED_FILE)
+    df = pd.DataFrame([trade_data])
+    try:
+        df.to_csv(CLOSED_FILE, mode='a', header=not file_exists, index=False)
+    except Exception as e:
+        logging.error(f"Error saving closed trade: {e}")
 
 def get_coinbase_candles(product_id, granularity=3600, limit=100):
     url = f"https://api.exchange.coinbase.com/products/{product_id}/candles?granularity={granularity}"
@@ -62,7 +110,9 @@ def get_coinbase_candles(product_id, granularity=3600, limit=100):
             df = df.tail(limit).reset_index(drop=True)
         return df
     except Exception as e:
-        print(f"Error fetching {product_id}: {e}")
+        error_msg = f"Error fetching {product_id}: {e}"
+        print(error_msg)
+        logging.error(error_msg)
         return None
 
 def calculate_rsi(series, period=14):
@@ -87,19 +137,24 @@ def calculate_atr(df, period=14):
     return tr.rolling(window=period).mean()
 
 def manage_flexible_paper_trades(current_prices):
-    trade_file = "active_flexible_trades.csv"
-    balance_file = "flexible_balance.txt"
-    
-    if os.path.exists(balance_file):
-        with open(balance_file, "r") as f:
-            current_balance = float(f.read().strip())
+    if os.path.exists(BALANCE_FILE):
+        try:
+            with open(BALANCE_FILE, "r") as f:
+                current_balance = float(f.read().strip())
+        except Exception:
+            current_balance = INITIAL_BALANCE
     else:
         current_balance = INITIAL_BALANCE
 
-    if not os.path.exists(trade_file):
+    if not os.path.exists(TRADE_FILE):
         return current_balance
 
-    trades_df = pd.read_csv(trade_file)
+    try:
+        trades_df = pd.read_csv(TRADE_FILE)
+    except Exception as e:
+        logging.error(f"Error reading {TRADE_FILE}: {e}")
+        return current_balance
+
     if trades_df.empty:
         return current_balance
 
@@ -122,12 +177,22 @@ def manage_flexible_paper_trades(current_prices):
                     current_balance += profit
                     msg = f"🎯 *Flexible Mean-Reversion TP Reached! (LONG {symbol})*\nProfit: `+${profit:.2f}`\nBalance: `${current_balance:.2f}`"
                     send_telegram_message(msg)
+                    save_closed_trade({
+                        'Timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                        'Symbol': symbol, 'Side': side, 'Entry': entry_price, 'Exit': tp1,
+                        'Result': 'WIN', 'PnL': round(profit, 2), 'Reason': 'TP_Reached'
+                    })
                     continue
                 elif curr_price <= sl:
                     loss = (entry_price - sl) * qty
                     current_balance -= loss
                     msg = f"🛑 *Flexible Stop Loss Hit! (LONG {symbol})*\nLoss: `-${loss:.2f}`\nBalance: `${current_balance:.2f}`"
                     send_telegram_message(msg)
+                    save_closed_trade({
+                        'Timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                        'Symbol': symbol, 'Side': side, 'Entry': entry_price, 'Exit': sl,
+                        'Result': 'LOSS', 'PnL': round(-loss, 2), 'Reason': 'Stop_Loss'
+                    })
                     continue
             
             elif side == "SHORT":
@@ -136,40 +201,7 @@ def manage_flexible_paper_trades(current_prices):
                     current_balance += profit
                     msg = f"🎯 *Flexible Mean-Reversion TP Reached! (SHORT {symbol})*\nProfit: `+${profit:.2f}`\nBalance: `${current_balance:.2f}`"
                     send_telegram_message(msg)
-                    continue
-                elif curr_price >= sl:
-                    loss = (sl - entry_price) * qty
-                    current_balance -= loss
-                    msg = f"🛑 *Flexible Stop Loss Hit! (SHORT {symbol})*\nLoss: `-${loss:.2f}`\nBalance: `${current_balance:.2f}`"
-                    send_telegram_message(msg)
-                    continue
-        
-        updated_trades.append(row)
-
-    if len(updated_trades) > 0:
-        pd.DataFrame(updated_trades).to_csv(trade_file, index=False)
-    else:
-        pd.DataFrame(columns=trades_df.columns).to_csv(trade_file, index=False)
-
-    with open(balance_file, "w") as f:
-        f.write(str(current_balance))
-
-    return current_balance
-
-def run_flexible_bot():
-    print("🔄 Flexible Bot (Mean Reversion Strategy) Scan Started...")
-    
-    balance_file = "flexible_balance.txt"
-    if os.path.exists(balance_file):
-        with open(balance_file, "r") as f:
-            account_balance = float(f.read().strip())
-    else:
-        account_balance = INITIAL_BALANCE
-
-    current_prices_map = {}
-    scan_results = []
-    new_trades = []
-    
-    trade_file = "active_flexible_trades.csv"
-    if os.path.exists(trade_file) and os.path.getsize(trade_file) > 0:
-        active
+                    save_closed_trade({
+                        'Timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                        'Symbol': symbol, 'Side': side, 'Entry': entry_price, 'Exit': tp1,
+                        'Result': 'WIN',
