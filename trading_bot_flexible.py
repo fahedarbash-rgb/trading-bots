@@ -4,14 +4,14 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 
-# مفاتيح التيليجرام للبوت المرن المطور
+# مفاتيح التيليجرام للبوت المرن (Mean Reversion)
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', "8678840548:AAFgx9th4C4lz-T3ThVwTEHr2uN-WOBmozo")
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', "5620413191")
 
 # إعدادات رأس المال والمخاطر
-INITIAL_BALANCE = 200.0    
-RISK_PERCENTAGE = 0.02    
-LEVERAGE = 3    
+INITIAL_BALANCE = 200.0     
+RISK_PERCENTAGE = 0.02     
+LEVERAGE = 3     
 
 # خريطة الرموز للتوافق مع Coinbase API
 COINBASE_PRODUCTS = {
@@ -71,16 +71,12 @@ def calculate_rsi(series, period=14):
     rs = gain / loss
     return 100 - (100 / (1 + rs))
 
-def calculate_ema(series, period):
-    return series.ewm(span=period, adjust=False).mean()
-
-def calculate_macd(series, fast=12, slow=26, signal=9):
-    exp1 = calculate_ema(series, fast)
-    exp2 = calculate_ema(series, slow)
-    macd_line = exp1 - exp2
-    signal_line = calculate_ema(macd_line, signal)
-    histogram = macd_line - signal_line
-    return macd_line, signal_line, histogram
+def calculate_bollinger_bands(series, period=20, std_dev=2):
+    middle = series.rolling(window=period).mean()
+    std = series.rolling(window=period).std()
+    upper = middle + (std * std_dev)
+    lower = middle - (std * std_dev)
+    return middle, upper, lower
 
 def calculate_atr(df, period=14):
     high_low = df['high'] - df['low']
@@ -109,6 +105,7 @@ def manage_flexible_paper_trades(current_prices):
     updated_trades = []
     for index, row in trades_df.iterrows():
         symbol = row['Symbol']
+        side = row['Side']
         entry_price = row['Entry']
         tp1 = row['TP1']
         tp2 = row['TP2']
@@ -118,25 +115,33 @@ def manage_flexible_paper_trades(current_prices):
         if symbol in current_prices:
             curr_price = current_prices[symbol]
             
-            # نظام وقف الخسارة المتحرك (Trailing Stop):
-            # إذا اقترب السعر من الهدف الأول، يتم رفع وقف الخسارة إلى سعر الدخول لحماية الصفقة
-            if curr_price >= (entry_price + (tp1 - entry_price) * 0.5) and sl < entry_price:
-                sl = entry_price
-                row['SL'] = sl
-                send_telegram_message(f"🔄 *Trailing Stop Activated! ({symbol})*\nStop Loss moved to Entry Price: `{sl:.3f}`")
-
-            if curr_price >= tp1:
-                profit = (tp1 - entry_price) * qty
-                current_balance += profit
-                msg = f"🎯 *Flexible TP Reached! ({symbol})*\nProfit: `+${profit:.2f}`\nBalance: `${current_balance:.2f}`"
-                send_telegram_message(msg)
-                continue
-            elif curr_price <= sl:
-                loss = (entry_price - sl) * qty if sl < entry_price else 0
-                current_balance -= loss
-                msg = f"🛑 *Flexible Stop Loss Hit! ({symbol})*\nLoss: `-${loss:.2f}`\nBalance: `${current_balance:.2f}`"
-                send_telegram_message(msg)
-                continue
+            if side == "LONG":
+                if curr_price >= tp1:
+                    profit = (tp1 - entry_price) * qty
+                    current_balance += profit
+                    msg = f"🎯 *Flexible Mean-Reversion TP Reached! (LONG {symbol})*\nProfit: `+${profit:.2f}`\nBalance: `${current_balance:.2f}`"
+                    send_telegram_message(msg)
+                    continue
+                elif curr_price <= sl:
+                    loss = (entry_price - sl) * qty
+                    current_balance -= loss
+                    msg = f"🛑 *Flexible Stop Loss Hit! (LONG {symbol})*\nLoss: `-${loss:.2f}`\nBalance: `${current_balance:.2f}`"
+                    send_telegram_message(msg)
+                    continue
+            
+            elif side == "SHORT":
+                if curr_price <= tp1:
+                    profit = (entry_price - tp1) * qty
+                    current_balance += profit
+                    msg = f"🎯 *Flexible Mean-Reversion TP Reached! (SHORT {symbol})*\nProfit: `+${profit:.2f}`\nBalance: `${current_balance:.2f}`"
+                    send_telegram_message(msg)
+                    continue
+                elif curr_price >= sl:
+                    loss = (sl - entry_price) * qty
+                    current_balance -= loss
+                    msg = f"🛑 *Flexible Stop Loss Hit! (SHORT {symbol})*\nLoss: `-${loss:.2f}`\nBalance: `${current_balance:.2f}`"
+                    send_telegram_message(msg)
+                    continue
         
         updated_trades.append(row)
 
@@ -151,7 +156,7 @@ def manage_flexible_paper_trades(current_prices):
     return current_balance
 
 def run_flexible_bot():
-    print("⚡ Flexible Bot Scan (Advanced with MACD & Trailing Stop) Started...")
+    print("🔄 Flexible Bot (Mean Reversion Strategy) Scan Started...")
     
     balance_file = "flexible_balance.txt"
     if os.path.exists(balance_file):
@@ -168,7 +173,7 @@ def run_flexible_bot():
     if os.path.exists(trade_file) and os.path.getsize(trade_file) > 0:
         active_trades_df = pd.read_csv(trade_file)
     else:
-        active_trades_df = pd.DataFrame(columns=['Symbol', 'Entry', 'TP1', 'TP2', 'SL', 'Qty'])
+        active_trades_df = pd.DataFrame(columns=['Symbol', 'Side', 'Entry', 'TP1', 'TP2', 'SL', 'Qty'])
 
     for symbol, cb_product in COINBASE_PRODUCTS.items():
         df = get_coinbase_candles(cb_product, granularity=3600, limit=100)
@@ -178,9 +183,7 @@ def run_flexible_bot():
             
         df['rsi'] = calculate_rsi(df['close'], 14)
         df['atr'] = calculate_atr(df, 14)
-        df['ema_fast'] = calculate_ema(df['close'], 20)
-        df['ema_slow'] = calculate_ema(df['close'], 50)
-        df['macd'], df['macd_signal'], df['macd_hist'] = calculate_macd(df['close'])
+        df['bb_mid', 'bb_upper', 'bb_lower'] = calculate_bollinger_bands(df['close'])
         
         current_price = df['close'].iloc[-1]
         prev_price = df['close'].iloc[-2]
@@ -190,24 +193,40 @@ def run_flexible_bot():
         
         current_rsi = df['rsi'].iloc[-1] if not np.isnan(df['rsi'].iloc[-1]) else 50.0
         current_atr = df['atr'].iloc[-1] if not np.isnan(df['atr'].iloc[-1]) else (current_price * 0.01)
-        ema_fast = df['ema_fast'].iloc[-1] if not np.isnan(df['ema_fast'].iloc[-1]) else current_price
-        ema_slow = df['ema_slow'].iloc[-1] if not np.isnan(df['ema_slow'].iloc[-1]) else current_price
-        macd_hist = df['macd_hist'].iloc[-1] if not np.isnan(df['macd_hist'].iloc[-1]) else 0
+        bb_mid = df['bb_mid'].iloc[-1] if not np.isnan(df['bb_mid'].iloc[-1]) else current_price
+        bb_upper = df['bb_upper'].iloc[-1] if not np.isnan(df['bb_upper'].iloc[-1]) else current_price * 1.02
+        bb_lower = df['bb_lower'].iloc[-1] if not np.isnan(df['bb_lower'].iloc[-1]) else current_price * 0.98
         
-        is_uptrend = ema_fast > ema_slow
-        is_pullback = (current_rsi < 50) and (current_rsi > 35)
-        is_macd_positive = macd_hist > 0  # تأكيد الزخم الإيجابي عبر الـ MACD
+        # شروط الارتداد العكسي (Mean Reversion)
+        is_oversold = (current_price <= bb_lower) and (current_rsi < 32)   # تشبع بيعي -> شراء لونج
+        is_overbought = (current_price >= bb_upper) and (current_rsi > 68) # تشبع شرائي -> بيع شورت
         
         signal_status = "No Signal"
-        if is_uptrend and is_pullback and is_macd_positive:
-            signal_status = "FLEXIBLE BUY (Advanced)"
-            tp1 = current_price + (current_atr * 1.2)
-            tp2 = current_price + (current_atr * 2.5)
-            sl = current_price - (current_atr * 1.2)
+        side = None
+        
+        if is_oversold:
+            signal_status = "MEAN REVERSION LONG"
+            side = "LONG"
+            tp1 = bb_mid  # الهدف الأول عند خط المنتصف للبولنجر
+            tp2 = bb_upper
+            sl = current_price - (current_atr * 1.5)
             
             risk_amount = account_balance * RISK_PERCENTAGE
             risk_per_unit = current_price - sl
             position_size = risk_amount / risk_per_unit if risk_per_unit > 0 else 0.01
+            
+        elif is_overbought:
+            signal_status = "MEAN REVERSION SHORT"
+            side = "SHORT"
+            tp1 = bb_mid  # الهدف الأول عند خط المنتصف
+            tp2 = bb_lower
+            sl = current_price + (current_atr * 1.5)
+            
+            risk_amount = account_balance * RISK_PERCENTAGE
+            risk_per_unit = sl - current_price
+            position_size = risk_amount / risk_per_unit if risk_per_unit > 0 else 0.01
+            
+        if side:
             position_value = position_size * current_price
             margin_required = position_value / LEVERAGE
             
@@ -218,6 +237,7 @@ def run_flexible_bot():
             if not already_open:
                 new_trades.append({
                     'Symbol': symbol,
+                    'Side': side,
                     'Entry': current_price,
                     'TP1': tp1,
                     'TP2': tp2,
@@ -225,23 +245,24 @@ def run_flexible_bot():
                     'Qty': position_size
                 })
 
+                emoji = "🟢" if side == "LONG" else "🔴"
                 message = (
-                    f"⚡ *Advanced Flexible Trade: {symbol}*\n"
-                    f"🟢 *Position Opened (With MACD & Trailing)*\n"
+                    f"🔄 *Flexible Mean-Reversion: {symbol}*\n"
+                    f"{emoji} *New {side} Position Opened (Bollinger/RSI)*\n"
                     f"💰 Entry: `{current_price}` (Change: `{price_change_pct:+.2f}%`)\n"
-                    f"🎯 TP1: `{tp1:.3f}` | TP2: `{tp2:.3f}`\n"
-                    f"🛑 Initial Stop Loss: `{sl:.3f}`\n"
+                    f"🎯 TP1 (Mid-Band): `{tp1:.3f}` | TP2: `{tp2:.3f}`\n"
+                    f"🛑 Stop Loss: `{sl:.3f}`\n"
                     f"⚖ *Risk & Leverage ({LEVERAGE}x):*\n"
                     f"• Qty: `{position_size:.4f}`\n"
                     f"• Margin: `${margin_required:.2f}`\n"
                     f"💼 *Balance:* `${account_balance:.2f}` USDT\n"
-                    f"📊 RSI: `{current_rsi:.1f}` | MACD Hist: `{macd_hist:.4f}`"
+                    f"📊 RSI: `{current_rsi:.1f}`"
                 )
                 send_telegram_message(message)
             
         scan_results.append({
             "Timestamp": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-            "Bot_Type": "Flexible_Advanced",
+            "Bot_Type": "Flexible_MeanReversion",
             "Symbol": symbol,
             "Price": current_price,
             "Change_Pct": round(price_change_pct, 2),
@@ -258,7 +279,7 @@ def run_flexible_bot():
 
     log_df = pd.DataFrame(scan_results)
     log_df.to_csv("bot_activity_log_flexible.csv", index=False)
-    print(f"⚡ Advanced Flexible Bot Scan Finished. Current Balance: ${account_balance:.2f}")
+    print(f"🔄 Flexible Mean-Reversion Scan Finished. Current Balance: ${account_balance:.2f}")
 
 if __name__ == "__main__":
     run_flexible_bot()
