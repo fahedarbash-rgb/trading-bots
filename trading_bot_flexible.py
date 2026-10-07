@@ -204,4 +204,39 @@ def manage_flexible_paper_trades(current_prices):
                     save_closed_trade({
                         'Timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
                         'Symbol': symbol, 'Side': side, 'Entry': entry_price, 'Exit': tp1,
-                        'Result': 'WIN',
+                        'Result': 'WIN', 'PnL': round(profit, 2), 'Reason': 'TP_Reached'
+                    })
+                    continue
+                elif curr_price >= sl:
+                    loss = (sl - entry_price) * qty
+                    current_balance -= loss
+                    msg = f"🛑 *Flexible Stop Loss Hit! (SHORT {symbol})*\nLoss: `-${loss:.2f}`\nBalance: `${current_balance:.2f}`"
+                    send_telegram_message(msg)
+                    save_closed_trade({
+                        'Timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                        'Symbol': symbol, 'Side': side, 'Entry': entry_price, 'Exit': sl,
+                        'Result': 'LOSS', 'PnL': round(-loss, 2), 'Reason': 'Stop_Loss'
+                    })
+                    continue
+                    
+        updated_trades.append(row)
+
+    if updated_trades:
+        pd.DataFrame(updated_trades).to_csv(TRADE_FILE, index=False)
+    else:
+        if os.path.exists(TRADE_FILE):
+            os.remove(TRADE_FILE)
+            
+    return current_balance
+
+if __name__ == "__main__":
+    check_heartbeat()
+    current_prices = {}
+    for sym, coinbase_id in COINBASE_PRODUCTS.items():
+        df = get_coinbase_candles(coinbase_id, granularity=3600, limit=5)
+        if df is not None and not df.empty:
+            current_prices[sym] = df.iloc[-1]['close']
+            
+    bal = manage_flexible_paper_trades(current_prices)
+    with open(BALANCE_FILE, "w") as f:
+        f.write(str(bal))
