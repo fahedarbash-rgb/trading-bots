@@ -225,38 +225,4 @@ def manage_and_scan_flexible_market():
                 margin = (entry * qty) / LEVERAGE
 
                 if margin <= (current_balance * MAX_TOTAL_MARGIN_RATIO):
-                    new_trade = {
-                        'Symbol': symbol, 'Side': 'LONG', 'Entry': entry,
-                        'TP1': tp1, 'TP2': tp1 * 1.01, 'SL': sl, 'Qty': qty
-                    }
-                    updated_trades.append(new_trade)
-                    open_symbols.append(symbol)
-                    
-                    send_telegram_message(
-                        f"🔄 *Flexible Bot: New LONG Mean-Reversion!*\n"
-                        f"🔹 Symbol: `{symbol}` | Entry: `{entry:.4f}`\n"
-                        f"🎯 TP (Mid-Band): `{tp1:.4f}` | 🛑 SL: `{sl:.4f}`\n"
-                        f"📊 RSI: `{curr_rsi:.1f}`"
-                    )
-                    break
-
-            # شروط SHORT: السعر لامس الحد العلوي أو فوقه + RSI تشبع شرائي
-            elif curr_price >= upper_b and curr_rsi > 65:
-                entry = curr_price
-                sl = entry + (curr_atr * 1.5)
-                tp1 = mid_b  # الهدف العودة لخط المنتصف
-                risk_amount = current_balance * RISK_PERCENTAGE
-                qty = risk_amount / (sl - entry) if (sl - entry) > 0 else 1.0
-                margin = (entry * qty) / LEVERAGE
-
-                if margin <= (current_balance * MAX_TOTAL_MARGIN_RATIO):
-                    new_trade = {
-                        'Symbol': symbol, 'Side': 'SHORT', 'Entry': entry,
-                        'TP1': tp1, 'TP2': tp1 * 0.99, 'SL': sl, 'Qty': qty
-                    }
-                    updated_trades.append(new_trade)
-                    open_symbols.append(symbol)
-                    
-                    send_telegram_message(
-                        f"🔄 *Flexible Bot: New SHORT Mean-Reversion!*\n"
-                        f"🔹 Symbol: `{symbol}` | Entry
+                    new
