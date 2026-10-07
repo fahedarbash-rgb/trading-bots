@@ -12,6 +12,7 @@ TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', "5620413191")
 INITIAL_BALANCE = 200.0    
 RISK_PERCENTAGE = 0.02    
 LEVERAGE = 3    
+MAX_TOTAL_MARGIN_RATIO = 0.6  # أقصى نسبة مسموح بها من الرصيد كإجمالي هوامش مفتوحة (60%)
 
 # خريطة الرموز للتوافق مع Coinbase API
 COINBASE_PRODUCTS = {
@@ -202,6 +203,12 @@ def run_strict_bot():
     else:
         active_trades_df = pd.DataFrame(columns=['Symbol', 'Entry', 'TP1', 'TP2', 'SL', 'Qty'])
 
+    # حساب إجمالي الهامش المستخدم حالياً في الصفقات المفتوحة
+    current_total_margin = 0.0
+    if not active_trades_df.empty:
+        for _, r in active_trades_df.iterrows():
+            current_total_margin += (r['Qty'] * r['Entry']) / LEVERAGE
+
     for symbol, cb_product in COINBASE_PRODUCTS.items():
         df_1h = get_coinbase_candles(cb_product, granularity=3600, limit=100)
         df_4h = get_coinbase_candles(cb_product, granularity=14400, limit=50)
@@ -253,6 +260,19 @@ def run_strict_bot():
             already_open = False
             if not active_trades_df.empty and symbol in active_trades_df['Symbol'].values:
                 already_open = True
+
+            # التحقق من أن الهامش الإجمالي لا يتجاوز الحد الأقصى المسموح به من الرصيد
+            max_allowed_total_margin = account_balance * MAX_TOTAL_MARGIN_RATIO
+            if (current_total_margin + margin_required) > max_allowed_total_margin:
+                available_margin_for_new = max_allowed_total_margin - current_total_margin
+                if available_margin_for_new > 5.0:
+                    margin_required = available_margin_for_new
+                    position_size = (margin_required * LEVERAGE) / current_price
+                else:
+                    print(f"⚠️ Skipped {symbol} Strict BUY: Margin limit reached.")
+                    continue
+
+            current_total_margin += margin_required
 
             if not already_open:
                 new_trades.append({
