@@ -64,7 +64,7 @@ def check_heartbeat():
         send_hb = True
 
     if send_hb:
-        send_telegram_message("💓 *Global S&R Scanner Bot Heartbeat:* البوت الشامل يعمل بكفاءة عالية ويراقب الأسواق.")
+        send_telegram_message("💓 *Global S&R Scanner Bot Heartbeat:* البوت المتقدم متعدد الأطر الزمنية يعمل بكفاءة عالية ويراقب الأسواق.")
         try:
             with open(HEARTBEAT_FILE, "w") as f:
                 f.write(now.isoformat())
@@ -137,7 +137,7 @@ def manage_and_scan_sr_market():
     updated_trades = []
     open_symbols = [t['Symbol'] for t in active_trades]
 
-    # 1. إدارة الصفقات المفتوحة
+    # 1. إدارة الصفقات المفتوحة (متابعة السعر اللحظي على إطار الساعة)
     for trade in active_trades:
         symbol = trade['Symbol']
         df = get_coinbase_candles(GLOBAL_PRODUCTS.get(symbol, "BTC-USD"), granularity=3600, limit=5)
@@ -183,29 +183,52 @@ def manage_and_scan_sr_market():
         if not closed:
             updated_trades.append(trade)
 
-    # 2. فحص السوق ودخول الصفقات مع شرط تأكيد حجم التداول ودعم ومقاومة
+    # 2. فحص السوق عبر نظام الأطر الزمنية المتعددة (Daily + 4H + 1H + 15m)
     if len(updated_trades) < 4:
         for symbol, coinbase_id in GLOBAL_PRODUCTS.items():
             if symbol in open_symbols:
                 continue
                 
-            df = get_coinbase_candles(coinbase_id, granularity=3600, limit=60)
-            if df is None or len(df) < 40:
+            # جلب البيانات للأطر الزمنية المختلفة
+            df_daily = get_coinbase_candles(coinbase_id, granularity=86400, limit=50) # يومي
+            df_4h = get_coinbase_candles(coinbase_id, granularity=21600, limit=50)    # 4 ساعات
+            df_1h = get_coinbase_candles(coinbase_id, granularity=3600, limit=60)     # ساعة
+            df_15m = get_coinbase_candles(coinbase_id, granularity=900, limit=30)     # 15 دقيقة
+            
+            if (df_daily is None or len(df_daily) < 30 or 
+                df_4h is None or len(df_4h) < 30 or 
+                df_1h is None or len(df_1h) < 40 or 
+                df_15m is None or len(df_15m) < 10):
                 continue
                 
-            df['atr'] = calculate_atr(df, 14)
-            df['avg_volume'] = df['volume'].rolling(window=20).mean()
-            support, resistance = find_support_resistance(df, window=30)
+            # تحديد الاتجاه العام للإطار اليومي وإطار 4 ساعات (EMA 50)
+            df_daily['ema50'] = df_daily['close'].ewm(span=50, adjust=False).mean()
+            trend_daily = "BULLISH" if df_daily.iloc[-1]['close'] > df_daily.iloc[-1]['ema50'] else "BEARISH"
+
+            df_4h['ema50'] = df_4h['close'].ewm(span=50, adjust=False).mean()
+            trend_4h = "BULLISH" if df_4h.iloc[-1]['close'] > df_4h.iloc[-1]['ema50'] else "BEARISH"
+
+            # استخراج الدعوم والمقاومات من إطار الساعة
+            df_1h['atr'] = calculate_atr(df_1h, 14)
+            df_1h['avg_volume'] = df_1h['volume'].rolling(window=20).mean()
+            support, resistance = find_support_resistance(df_1h, window=30)
             
-            curr_price = df.iloc[-1]['close']
-            curr_volume = df.iloc[-1]['volume']
-            avg_volume = df.iloc[-1]['avg_volume']
-            curr_atr = df.iloc[-1]['atr']
+            curr_price = df_1h.iloc[-1]['close']
+            curr_volume = df_1h.iloc[-1]['volume']
+            avg_volume = df_1h.iloc[-1]['avg_volume']
+            curr_atr = df_1h.iloc[-1]['atr']
 
             is_volume_confirmed = curr_volume >= (avg_volume * 0.9)
 
-            # شروط LONG
-            if abs(curr_price - support) <= (curr_atr * 0.4) and curr_price >= support and is_volume_confirmed:
+            # تأكيد إضافي من إطار 15 دقيقة (التأكد من أن الشمعة الأخيرة تبدأ بالارتداد صعوداً أو هبوطاً)
+            last_15m_close = df_15m.iloc[-1]['close']
+            prev_15m_close = df_15m.iloc[-2]['close']
+
+            # شروط صفقات الشراء LONG (توافق صاعد على اليومي والـ 4 ساعات + ارتداد 15 دقيقة)
+            if (trend_daily == "BULLISH" and trend_4h == "BULLISH" and 
+                abs(curr_price - support) <= (curr_atr * 0.4) and curr_price >= support and 
+                is_volume_confirmed and last_15m_close >= prev_15m_close):
+                
                 entry = curr_price
                 sl = support - (curr_atr * 1.0)
                 tp1 = resistance
@@ -222,16 +245,20 @@ def manage_and_scan_sr_market():
                     open_symbols.append(symbol)
                     
                     send_telegram_message(
-                        f"🛡️ *Global S&R Bot: Confirmed LONG (3x)*\n"
+                        f"🛡️ *Global S&R Bot: Confirmed LONG (3x | Multi-TF Confluence)*\n"
                         f"🔹 Symbol: `{symbol}` | Entry: `{entry:.4f}`\n"
-                        f"🟢 Support: `{support:.4f}` | 📊 Vol Confirmed\n"
+                        f"📈 Trend (Daily/4H): `UP / UP`\n"
+                        f"🟢 Support: `{support:.4f}` | 📊 Vol & 15m Confirmed\n"
                         f"🎯 TP: `{tp1:.4f}` | 🛑 SL: `{sl:.4f}`\n"
                         f"⚖️ Margin: `${margin:.2f}`"
                     )
                     break
 
-            # شروط SHORT
-            elif abs(curr_price - resistance) <= (curr_atr * 0.4) and curr_price <= resistance and is_volume_confirmed:
+            # شروط صفقات البيع SHORT (توافق هابط على اليومي والـ 4 ساعات + ارتداد 15 دقيقة)
+            elif (trend_daily == "BEARISH" and trend_4h == "BEARISH" and 
+                  abs(curr_price - resistance) <= (curr_atr * 0.4) and curr_price <= resistance and 
+                  is_volume_confirmed and last_15m_close <= prev_15m_close):
+                
                 entry = curr_price
                 sl = resistance + (curr_atr * 1.0)
                 tp1 = support
@@ -248,9 +275,10 @@ def manage_and_scan_sr_market():
                     open_symbols.append(symbol)
                     
                     send_telegram_message(
-                        f"🛡️ *Global S&R Bot: Confirmed SHORT (3x)*\n"
+                        f"🛡️ *Global S&R Bot: Confirmed SHORT (3x | Multi-TF Confluence)*\n"
                         f"🔹 Symbol: `{symbol}` | Entry: `{entry:.4f}`\n"
-                        f"🔴 Resistance: `{resistance:.4f}` | 📊 Vol Confirmed\n"
+                        f"📉 Trend (Daily/4H): `DOWN / DOWN`\n"
+                        f"🔴 Resistance: `{resistance:.4f}` | 📊 Vol & 15m Confirmed\n"
                         f"🎯 TP: `{tp1:.4f}` | 🛑 SL: `{sl:.4f}`\n"
                         f"⚖️ Margin: `${margin:.2f}`"
                     )
