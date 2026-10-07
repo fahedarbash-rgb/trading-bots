@@ -12,6 +12,7 @@ TELEGRAM_CHAT_ID = "5620413191"
 INITIAL_BALANCE = 200.0       
 RISK_PERCENTAGE = 0.02        
 LEVERAGE = 3                  
+MAX_TOTAL_MARGIN_RATIO = 0.6  # أقصى نسبة مسموح بها من الرصيد كإجمالي هوامش مفتوحة (60%)
 
 # --- سلة العملات المعتمدة ---
 COINBASE_PRODUCTS = {
@@ -175,6 +176,12 @@ def run_balanced_bot():
     else:
         active_trades_df = pd.DataFrame(columns=['Symbol', 'Side', 'Entry', 'TP1', 'TP2', 'TP3', 'SL', 'Qty'])
 
+    # حساب إجمالي الهامش المستخدم حالياً في الصفقات المفتوحة
+    current_total_margin = 0.0
+    if not active_trades_df.empty:
+        for _, r in active_trades_df.iterrows():
+            current_total_margin += (r['Qty'] * r['Entry']) / LEVERAGE
+
     for symbol, cb_product in COINBASE_PRODUCTS.items():
         df = get_coinbase_candles(cb_product, granularity=3600, limit=100)
         
@@ -202,24 +209,31 @@ def run_balanced_bot():
             entry_price = current_price
             sl = round(support - (current_atr * 1.0), 4)
             
-            # ترتيب الأهداف تصاعدياً بدقة
             risk_unit = entry_price - sl
             tp1 = round(entry_price + (risk_unit * 1.0), 4)
             tp2 = round(entry_price + (risk_unit * 2.0), 4)
             tp3_calc = round(entry_price + (risk_unit * 3.5), 4)
             tp3 = max(resistance, tp3_calc) if resistance > entry_price else tp3_calc
             
-            # إدارة المخاطر وتحديد حجم الصفقة بما يتناسب مع رأس المال
             risk_amount = account_balance * RISK_PERCENTAGE
             risk_per_unit = risk_unit
             position_size = risk_amount / risk_per_unit if risk_per_unit > 0 else 0.01
             position_value = position_size * entry_price
             margin_required = position_value / LEVERAGE
             
-            # حماية الهامش الافتراضي لئلا يتجاوز رصيد الحساب بالكامل
-            if margin_required > (account_balance * 0.8):
-                position_size = (account_balance * 0.8 * LEVERAGE) / entry_price
-                margin_required = (position_size * entry_price) / LEVERAGE
+            # التحقق من أن الهامش الإجمالي لا يتجاوز الحد الأقصى المسموح به من الرصيد
+            max_allowed_total_margin = account_balance * MAX_TOTAL_MARGIN_RATIO
+            if (current_total_margin + margin_required) > max_allowed_total_margin:
+                # إذا تجاوز الحد، نقوم بتعديل الهامش المتاح لهذه الصفقة أو تخطيها لتفادي المخاطر
+                available_margin_for_new = max_allowed_total_margin - current_total_margin
+                if available_margin_for_new > 5.0: # السماح فقط إذا كان هناك رصيد هامش كافٍ ومجدي
+                    margin_required = available_margin_for_new
+                    position_size = (margin_required * LEVERAGE) / entry_price
+                else:
+                    print(f"⚠️ Skipped {symbol} LONG: Margin limit reached.")
+                    continue
+
+            current_total_margin += margin_required
 
             new_trades.append({
                 'Symbol': symbol,
@@ -252,7 +266,6 @@ def run_balanced_bot():
             entry_price = current_price
             sl = round(resistance + (current_atr * 1.0), 4)
             
-            # ترتيب الأهداف تنازلياً بدقة للـ Short
             risk_unit = sl - entry_price
             tp1 = round(entry_price - (risk_unit * 1.0), 4)
             tp2 = round(entry_price - (risk_unit * 2.0), 4)
@@ -265,9 +278,17 @@ def run_balanced_bot():
             position_value = position_size * entry_price
             margin_required = position_value / LEVERAGE
             
-            if margin_required > (account_balance * 0.8):
-                position_size = (account_balance * 0.8 * LEVERAGE) / entry_price
-                margin_required = (position_size * entry_price) / LEVERAGE
+            max_allowed_total_margin = account_balance * MAX_TOTAL_MARGIN_RATIO
+            if (current_total_margin + margin_required) > max_allowed_total_margin:
+                available_margin_for_new = max_allowed_total_margin - current_total_margin
+                if available_margin_for_new > 5.0:
+                    margin_required = available_margin_for_new
+                    position_size = (margin_required * LEVERAGE) / entry_price
+                else:
+                    print(f"⚠️ Skipped {symbol} SHORT: Margin limit reached.")
+                    continue
+
+            current_total_margin += margin_required
 
             new_trades.append({
                 'Symbol': symbol,
