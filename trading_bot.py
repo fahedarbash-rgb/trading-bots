@@ -1,8 +1,16 @@
 import os
+import logging
 import requests
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
+
+# --- إعداد نظام تسجيل الأخطاء (Error Logging) ---
+logging.basicConfig(
+    filename='bot_errors.log',
+    level=logging.ERROR,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
 
 # مفاتيح التيليجرام للبوت الصارم المطور
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', "8935193100:AAGGIvDsapewUqGO-Z0Faas46D0VNgGkQKo")
@@ -13,6 +21,12 @@ INITIAL_BALANCE = 200.0
 RISK_PERCENTAGE = 0.02    
 LEVERAGE = 3    
 MAX_TOTAL_MARGIN_RATIO = 0.6  # أقصى نسبة مسموح بها من الرصيد كإجمالي هوامش مفتوحة (60%)
+
+# --- ملفات السجلات والأرشيف الخاصة بالبوت الصارم ---
+TRADE_FILE = "active_strict_trades.csv"
+BALANCE_FILE = "strict_balance.txt"
+CLOSED_FILE = "closed_strict_trades_history.csv"
+HEARTBEAT_FILE = "last_strict_heartbeat.txt"
 
 # خريطة الرموز للتوافق مع Coinbase API
 COINBASE_PRODUCTS = {
@@ -33,10 +47,71 @@ def send_telegram_message(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "Markdown"}
     try:
-        response = requests.post(url, json=payload)
+        response = requests.post(url, json=payload, timeout=10)
         print(f"Telegram Response: {response.status_code}")
     except Exception as e:
-        print(f"Error: {e}")
+        error_msg = f"Telegram Error: {e}"
+        print(error_msg)
+        logging.error(error_msg)
+
+def check_heartbeat():
+    """إرسال نبضة قلب دورية (كل 24 ساعة) لتأكيد أن البوت الصارم يعمل بانتظام"""
+    now = datetime.utcnow()
+    send_hb = False
+    if os.path.exists(HEARTBEAT_FILE):
+        try:
+            with open(HEARTBEAT_FILE, "r") as f:
+                last_time = datetime.fromisoformat(f.read().strip())
+                if (now - last_time) >= timedelta(hours=24):
+                    send_hb = True
+        except Exception:
+            send_hb = True
+    else:
+        send_hb = True
+
+    if send_hb:
+        send_telegram_message("💓 *Strict Bot Heartbeat:* البوت الصارم يعمل بشكل سليم ومستقر ومتصل بنجاح.")
+        try:
+            with open(HEARTBEAT_FILE, "w") as f:
+                f.write(now.isoformat())
+        except Exception as e:
+            logging.error(f"Error writing heartbeat file: {e}")
+
+def save_closed_trade(trade_data):
+    """حفظ تفاصيل الصفقة المغلقة في أرشيف مستقل لتحليل الأداء"""
+    file_exists = os.path.exists(CLOSED_FILE)
+    df = pd.DataFrame([trade_data])
+    try:
+        df.to_csv(CLOSED_FILE, mode='a', header=not file_exists, index=False)
+    except Exception as e:
+        logging.error(f"Error saving closed trade: {e}")
+
+def send_performance_summary(current_balance):
+    """إرسال تقرير الأداء اليومي وملخص الإحصائيات (Win Rate)"""
+    if not os.path.exists(CLOSED_FILE):
+        return
+    try:
+        df = pd.read_csv(CLOSED_FILE)
+        if df.empty:
+            return
+        total_trades = len(df)
+        wins = len(df[df['Result'] == 'WIN'])
+        losses = len(df[df['Result'] == 'LOSS'])
+        win_rate = (wins / total_trades) * 100 if total_trades > 0 else 0
+        total_pnl = df['PnL'].sum()
+
+        sign_str = '+' if total_pnl >= 0 else ''
+        msg = (
+            f"📊 *تقرير الأداء الدوري - Strict Bot*\n"
+            f"💰 الرصيد الحالي: `${current_balance:.2f}` USDT\n"
+            f"📈 إجمالي الصفقات: `{total_trades}`\n"
+            f"🏆 صفقات رابحة: `{wins}` | ❌ خاسرة: `{losses}`\n"
+            f"🎯 نسبة النجاح (Win Rate): `{win_rate:.1f}%`\n"
+            f"💵 صافي الأرباح/الخسائر: `${sign_str}{total_pnl:.2f}`"
+        )
+        send_telegram_message(msg)
+    except Exception as e:
+        logging.error(f"Error generating performance summary: {e}")
 
 def get_coinbase_candles(product_id, granularity=3600, limit=100):
     url = f"https://api.exchange.coinbase.com/products/{product_id}/candles?granularity={granularity}"
@@ -62,7 +137,9 @@ def get_coinbase_candles(product_id, granularity=3600, limit=100):
             df = df.tail(limit).reset_index(drop=True)
         return df
     except Exception as e:
-        print(f"Error fetching {product_id}: {e}")
+        error_msg = f"Error fetching {product_id}: {e}"
+        print(error_msg)
+        logging.error(error_msg)
         return None
 
 def calculate_rsi(series, period=14):
@@ -124,19 +201,24 @@ def calculate_atr(df, period=14):
     return tr.rolling(window=period).mean()
 
 def manage_strict_paper_trades(current_prices):
-    trade_file = "active_strict_trades.csv"
-    balance_file = "strict_balance.txt"
-    
-    if os.path.exists(balance_file):
-        with open(balance_file, "r") as f:
-            current_balance = float(f.read().strip())
+    if os.path.exists(BALANCE_FILE):
+        try:
+            with open(BALANCE_FILE, "r") as f:
+                current_balance = float(f.read().strip())
+        except Exception:
+            current_balance = INITIAL_BALANCE
     else:
         current_balance = INITIAL_BALANCE
 
-    if not os.path.exists(trade_file):
+    if not os.path.exists(TRADE_FILE):
         return current_balance
 
-    trades_df = pd.read_csv(trade_file)
+    try:
+        trades_df = pd.read_csv(TRADE_FILE)
+    except Exception as e:
+        logging.error(f"Error reading {TRADE_FILE}: {e}")
+        return current_balance
+
     if trades_df.empty:
         return current_balance
 
@@ -162,163 +244,4 @@ def manage_strict_paper_trades(current_prices):
                 profit = (tp1 - entry_price) * qty
                 current_balance += profit
                 msg = f"🎯 *Strict TP Reached! ({symbol})*\nProfit: `+${profit:.2f}`\nBalance: `${current_balance:.2f}`"
-                send_telegram_message(msg)
-                continue
-            elif curr_price <= sl:
-                loss = (entry_price - sl) * qty if sl < entry_price else 0
-                current_balance -= loss
-                msg = f"🛑 *Strict Stop Loss Hit! ({symbol})*\nLoss: `-${loss:.2f}`\nBalance: `${current_balance:.2f}`"
-                send_telegram_message(msg)
-                continue
-        
-        updated_trades.append(row)
-
-    if len(updated_trades) > 0:
-        pd.DataFrame(updated_trades).to_csv(trade_file, index=False)
-    else:
-        pd.DataFrame(columns=trades_df.columns).to_csv(trade_file, index=False)
-
-    with open(balance_file, "w") as f:
-        f.write(str(current_balance))
-
-    return current_balance
-
-def run_strict_bot():
-    print("🛡️ Strict Bot Scan (Advanced with MACD & Trailing Stop) Started...")
-    
-    balance_file = "strict_balance.txt"
-    if os.path.exists(balance_file):
-        with open(balance_file, "r") as f:
-            account_balance = float(f.read().strip())
-    else:
-        account_balance = INITIAL_BALANCE
-
-    current_prices_map = {}
-    scan_results = []
-    new_trades = []
-    
-    trade_file = "active_strict_trades.csv"
-    if os.path.exists(trade_file) and os.path.getsize(trade_file) > 0:
-        active_trades_df = pd.read_csv(trade_file)
-    else:
-        active_trades_df = pd.DataFrame(columns=['Symbol', 'Entry', 'TP1', 'TP2', 'SL', 'Qty'])
-
-    # حساب إجمالي الهامش المستخدم حالياً في الصفقات المفتوحة
-    current_total_margin = 0.0
-    if not active_trades_df.empty:
-        for _, r in active_trades_df.iterrows():
-            current_total_margin += (r['Qty'] * r['Entry']) / LEVERAGE
-
-    for symbol, cb_product in COINBASE_PRODUCTS.items():
-        df_1h = get_coinbase_candles(cb_product, granularity=3600, limit=100)
-        df_4h = get_coinbase_candles(cb_product, granularity=14400, limit=50)
-        
-        if df_1h is None or len(df_1h) < 50 or df_4h is None or len(df_4h) < 20:
-            continue
-            
-        # مؤشرات فريم الساعة
-        df_1h['rsi'] = calculate_rsi(df_1h['close'], 14)
-        df_1h['mfi'] = calculate_mfi(df_1h, 14)
-        df_1h['adx'] = calculate_adx(df_1h, 14)
-        df_1h['atr'] = calculate_atr(df_1h, 14)
-        _, _, df_1h['bbl'] = calculate_bollinger_bands(df_1h['close'])
-        df_1h['macd'], df_1h['macd_signal'], df_1h['macd_hist'] = calculate_macd(df_1h['close'])
-        
-        # مؤشر فريم 4 ساعات لتأكيد الاتجاه العام
-        df_4h['ema_trend'] = calculate_ema(df_4h['close'], 50)
-        
-        current_price = df_1h['close'].iloc[-1]
-        prev_price = df_1h['close'].iloc[-2]
-        price_change_pct = ((current_price - prev_price) / prev_price) * 100
-        current_prices_map[symbol] = current_price
-        
-        current_rsi = df_1h['rsi'].iloc[-1] if not np.isnan(df_1h['rsi'].iloc[-1]) else 50.0
-        current_mfi = df_1h['mfi'].iloc[-1] if not np.isnan(df_1h['mfi'].iloc[-1]) else 50.0
-        current_adx = df_1h['adx'].iloc[-1] if not np.isnan(df_1h['adx'].iloc[-1]) else 25.0
-        current_atr = df_1h['atr'].iloc[-1] if not np.isnan(df_1h['atr'].iloc[-1]) else (current_price * 0.01)
-        bbl_val = df_1h['bbl'].iloc[-1] if not np.isnan(df_1h['bbl'].iloc[-1]) else current_price
-        macd_hist = df_1h['macd_hist'].iloc[-1] if not np.isnan(df_1h['macd_hist'].iloc[-1]) else 0
-        
-        is_bullish_4h = df_4h['close'].iloc[-1] > df_4h['ema_trend'].iloc[-1]
-        is_strong_trend = current_adx > 20
-        is_oversold_or_support = (current_rsi < 42) or (current_mfi < 40) or (current_price <= bbl_val * 1.01)
-        is_macd_positive = macd_hist > 0  # تأكيد الزخم عبر MACD
-        
-        signal_status = "No Signal"
-        if is_bullish_4h and is_strong_trend and is_oversold_or_support and is_macd_positive:
-            signal_status = "STRONG BUY (Advanced)"
-            tp1 = current_price + (current_atr * 1.5)
-            tp2 = current_price + (current_atr * 3.0)
-            sl = current_price - (current_atr * 1.5)
-            
-            risk_amount = account_balance * RISK_PERCENTAGE
-            risk_per_unit = current_price - sl
-            position_size = risk_amount / risk_per_unit if risk_per_unit > 0 else 0.01
-            position_value = position_size * current_price
-            margin_required = position_value / LEVERAGE
-            
-            already_open = False
-            if not active_trades_df.empty and symbol in active_trades_df['Symbol'].values:
-                already_open = True
-
-            # التحقق من أن الهامش الإجمالي لا يتجاوز الحد الأقصى المسموح به من الرصيد
-            max_allowed_total_margin = account_balance * MAX_TOTAL_MARGIN_RATIO
-            if (current_total_margin + margin_required) > max_allowed_total_margin:
-                available_margin_for_new = max_allowed_total_margin - current_total_margin
-                if available_margin_for_new > 5.0:
-                    margin_required = available_margin_for_new
-                    position_size = (margin_required * LEVERAGE) / current_price
-                else:
-                    print(f"⚠️ Skipped {symbol} Strict BUY: Margin limit reached.")
-                    continue
-
-            current_total_margin += margin_required
-
-            if not already_open:
-                new_trades.append({
-                    'Symbol': symbol,
-                    'Entry': current_price,
-                    'TP1': tp1,
-                    'TP2': tp2,
-                    'SL': sl,
-                    'Qty': position_size
-                })
-
-                message = (
-                    f"🛡️ *Advanced Strict Trade: {symbol}*\n"
-                    f"🟢 *Position Opened (Strict Rules + MACD)*\n"
-                    f"💰 Entry: `{current_price}` (Change: `{price_change_pct:+.2f}%`)\n"
-                    f"🎯 TP1: `{tp1:.3f}` | TP2: `{tp2:.3f}`\n"
-                    f"🛑 Initial Stop Loss: `{sl:.3f}`\n"
-                    f"⚖ *Risk & Leverage ({LEVERAGE}x):*\n"
-                    f"• Qty: `{position_size:.4f}`\n"
-                    f"• Margin: `${margin_required:.2f}`\n"
-                    f"💼 *Balance:* `${account_balance:.2f}` USDT\n"
-                    f"📊 RSI: `{current_rsi:.1f}` | MFI: `{current_mfi:.1f}` | ADX: `{current_adx:.1f}`"
-                )
-                send_telegram_message(message)
-            
-        scan_results.append({
-            "Timestamp": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-            "Bot_Type": "Strict_Advanced",
-            "Symbol": symbol,
-            "Price": current_price,
-            "Change_Pct": round(price_change_pct, 2),
-            "RSI": round(current_rsi, 1),
-            "ADX": round(current_adx, 1),
-            "Signal": signal_status
-        })
-        
-    account_balance = manage_strict_paper_trades(current_prices_map)
-
-    if len(new_trades) > 0:
-        new_df = pd.DataFrame(new_trades)
-        updated_active = pd.concat([active_trades_df, new_df], ignore_index=True)
-        updated_active.to_csv(trade_file, index=False)
-
-    log_df = pd.DataFrame(scan_results)
-    log_df.to_csv("bot_activity_log_strict.csv", index=False)
-    print(f"🛡️ Advanced Strict Bot Scan Finished. Current Balance: ${account_balance:.2f}")
-
-if __name__ == "__main__":
-    run_strict_bot()
+                send_telegram_message(msg
