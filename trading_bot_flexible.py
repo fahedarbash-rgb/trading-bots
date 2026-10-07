@@ -183,7 +183,8 @@ def run_flexible_bot():
             
         df['rsi'] = calculate_rsi(df['close'], 14)
         df['atr'] = calculate_atr(df, 14)
-        df['bb_mid', 'bb_upper', 'bb_lower'] = calculate_bollinger_bands(df['close'])
+        # التعديل الصحيح لإسناد أعمدة البولنجر باند:
+        df['bb_mid'], df['bb_upper'], df['bb_lower'] = calculate_bollinger_bands(df['close'])
         
         current_price = df['close'].iloc[-1]
         prev_price = df['close'].iloc[-2]
@@ -197,9 +198,8 @@ def run_flexible_bot():
         bb_upper = df['bb_upper'].iloc[-1] if not np.isnan(df['bb_upper'].iloc[-1]) else current_price * 1.02
         bb_lower = df['bb_lower'].iloc[-1] if not np.isnan(df['bb_lower'].iloc[-1]) else current_price * 0.98
         
-        # شروط الارتداد العكسي (Mean Reversion)
-        is_oversold = (current_price <= bb_lower) and (current_rsi < 32)   # تشبع بيعي -> شراء لونج
-        is_overbought = (current_price >= bb_upper) and (current_rsi > 68) # تشبع شرائي -> بيع شورت
+        is_oversold = (current_price <= bb_lower) and (current_rsi < 32)
+        is_overbought = (current_price >= bb_upper) and (current_rsi > 68)
         
         signal_status = "No Signal"
         side = None
@@ -207,7 +207,7 @@ def run_flexible_bot():
         if is_oversold:
             signal_status = "MEAN REVERSION LONG"
             side = "LONG"
-            tp1 = bb_mid  # الهدف الأول عند خط المنتصف للبولنجر
+            tp1 = bb_mid
             tp2 = bb_upper
             sl = current_price - (current_atr * 1.5)
             
@@ -218,7 +218,7 @@ def run_flexible_bot():
         elif is_overbought:
             signal_status = "MEAN REVERSION SHORT"
             side = "SHORT"
-            tp1 = bb_mid  # الهدف الأول عند خط المنتصف
+            tp1 = bb_mid
             tp2 = bb_lower
             sl = current_price + (current_atr * 1.5)
             
