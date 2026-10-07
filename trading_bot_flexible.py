@@ -12,6 +12,7 @@ TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', "5620413191")
 INITIAL_BALANCE = 200.0     
 RISK_PERCENTAGE = 0.02     
 LEVERAGE = 3     
+MAX_TOTAL_MARGIN_RATIO = 0.6  # أقصى نسبة مسموح بها من الرصيد كإجمالي هوامش مفتوحة (60%)
 
 # خريطة الرموز للتوافق مع Coinbase API
 COINBASE_PRODUCTS = {
@@ -171,115 +172,4 @@ def run_flexible_bot():
     
     trade_file = "active_flexible_trades.csv"
     if os.path.exists(trade_file) and os.path.getsize(trade_file) > 0:
-        active_trades_df = pd.read_csv(trade_file)
-    else:
-        active_trades_df = pd.DataFrame(columns=['Symbol', 'Side', 'Entry', 'TP1', 'TP2', 'SL', 'Qty'])
-
-    for symbol, cb_product in COINBASE_PRODUCTS.items():
-        df = get_coinbase_candles(cb_product, granularity=3600, limit=100)
-        
-        if df is None or len(df) < 50:
-            continue
-            
-        df['rsi'] = calculate_rsi(df['close'], 14)
-        df['atr'] = calculate_atr(df, 14)
-        # التعديل الصحيح لإسناد أعمدة البولنجر باند:
-        df['bb_mid'], df['bb_upper'], df['bb_lower'] = calculate_bollinger_bands(df['close'])
-        
-        current_price = df['close'].iloc[-1]
-        prev_price = df['close'].iloc[-2]
-        price_change_pct = ((current_price - prev_price) / prev_price) * 100
-        
-        current_prices_map[symbol] = current_price
-        
-        current_rsi = df['rsi'].iloc[-1] if not np.isnan(df['rsi'].iloc[-1]) else 50.0
-        current_atr = df['atr'].iloc[-1] if not np.isnan(df['atr'].iloc[-1]) else (current_price * 0.01)
-        bb_mid = df['bb_mid'].iloc[-1] if not np.isnan(df['bb_mid'].iloc[-1]) else current_price
-        bb_upper = df['bb_upper'].iloc[-1] if not np.isnan(df['bb_upper'].iloc[-1]) else current_price * 1.02
-        bb_lower = df['bb_lower'].iloc[-1] if not np.isnan(df['bb_lower'].iloc[-1]) else current_price * 0.98
-        
-        is_oversold = (current_price <= bb_lower) and (current_rsi < 32)
-        is_overbought = (current_price >= bb_upper) and (current_rsi > 68)
-        
-        signal_status = "No Signal"
-        side = None
-        
-        if is_oversold:
-            signal_status = "MEAN REVERSION LONG"
-            side = "LONG"
-            tp1 = bb_mid
-            tp2 = bb_upper
-            sl = current_price - (current_atr * 1.5)
-            
-            risk_amount = account_balance * RISK_PERCENTAGE
-            risk_per_unit = current_price - sl
-            position_size = risk_amount / risk_per_unit if risk_per_unit > 0 else 0.01
-            
-        elif is_overbought:
-            signal_status = "MEAN REVERSION SHORT"
-            side = "SHORT"
-            tp1 = bb_mid
-            tp2 = bb_lower
-            sl = current_price + (current_atr * 1.5)
-            
-            risk_amount = account_balance * RISK_PERCENTAGE
-            risk_per_unit = sl - current_price
-            position_size = risk_amount / risk_per_unit if risk_per_unit > 0 else 0.01
-            
-        if side:
-            position_value = position_size * current_price
-            margin_required = position_value / LEVERAGE
-            
-            already_open = False
-            if not active_trades_df.empty and symbol in active_trades_df['Symbol'].values:
-                already_open = True
-
-            if not already_open:
-                new_trades.append({
-                    'Symbol': symbol,
-                    'Side': side,
-                    'Entry': current_price,
-                    'TP1': tp1,
-                    'TP2': tp2,
-                    'SL': sl,
-                    'Qty': position_size
-                })
-
-                emoji = "🟢" if side == "LONG" else "🔴"
-                message = (
-                    f"🔄 *Flexible Mean-Reversion: {symbol}*\n"
-                    f"{emoji} *New {side} Position Opened (Bollinger/RSI)*\n"
-                    f"💰 Entry: `{current_price}` (Change: `{price_change_pct:+.2f}%`)\n"
-                    f"🎯 TP1 (Mid-Band): `{tp1:.3f}` | TP2: `{tp2:.3f}`\n"
-                    f"🛑 Stop Loss: `{sl:.3f}`\n"
-                    f"⚖ *Risk & Leverage ({LEVERAGE}x):*\n"
-                    f"• Qty: `{position_size:.4f}`\n"
-                    f"• Margin: `${margin_required:.2f}`\n"
-                    f"💼 *Balance:* `${account_balance:.2f}` USDT\n"
-                    f"📊 RSI: `{current_rsi:.1f}`"
-                )
-                send_telegram_message(message)
-            
-        scan_results.append({
-            "Timestamp": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-            "Bot_Type": "Flexible_MeanReversion",
-            "Symbol": symbol,
-            "Price": current_price,
-            "Change_Pct": round(price_change_pct, 2),
-            "RSI": round(current_rsi, 1),
-            "Signal": signal_status
-        })
-        
-    account_balance = manage_flexible_paper_trades(current_prices_map)
-
-    if len(new_trades) > 0:
-        new_df = pd.DataFrame(new_trades)
-        updated_active = pd.concat([active_trades_df, new_df], ignore_index=True)
-        updated_active.to_csv(trade_file, index=False)
-
-    log_df = pd.DataFrame(scan_results)
-    log_df.to_csv("bot_activity_log_flexible.csv", index=False)
-    print(f"🔄 Flexible Mean-Reversion Scan Finished. Current Balance: ${account_balance:.2f}")
-
-if __name__ == "__main__":
-    run_flexible_bot()
+        active
