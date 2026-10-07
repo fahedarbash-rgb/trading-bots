@@ -1,4 +1,4 @@
-name: Run Trading Bots
+Name: Run Trading Bots
 
 on:
   schedule:
@@ -47,7 +47,8 @@ jobs:
       run: |
         git config --global user.name "github-actions[bot]"
         git config --global user.email "github-actions[bot]@users.noreply.github.com"
-        git pull origin main --rebase || true
+        git fetch origin main
+        git reset --soft origin/main || true
         git add active_flexible_trades.csv active_strict_trades.csv active_balanced_trades.csv flexible_balance.txt strict_balance.txt balanced_balance.txt 2>/dev/null || true
         git diff --staged --quiet || git commit -m "Update all bots states and trades automatically"
         git push origin main
