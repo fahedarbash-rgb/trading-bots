@@ -3,7 +3,7 @@ import logging
 import requests
 import pandas as pd
 import numpy as np
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # --- إعداد نظام تسجيل الأخطاء (Error Logging) ---
 logging.basicConfig(
@@ -21,6 +21,12 @@ INITIAL_BALANCE = 200.0
 RISK_PERCENTAGE = 0.02        
 LEVERAGE = 3                  
 MAX_TOTAL_MARGIN_RATIO = 0.6  # أقصى نسبة مسموح بها من الرصيد كإجمالي هوامش مفتوحة (60%)
+
+# --- ملفات السجلات والأرشيف ---
+TRADE_FILE = "active_balanced_trades.csv"
+BALANCE_FILE = "balanced_balance.txt"
+CLOSED_FILE = "closed_trades_history.csv"
+HEARTBEAT_FILE = "last_heartbeat.txt"
 
 # --- سلة العملات المعتمدة ---
 COINBASE_PRODUCTS = {
@@ -42,6 +48,66 @@ def send_telegram_message(message):
         error_msg = f"Telegram Error: {e}"
         print(error_msg)
         logging.error(error_msg)
+
+def check_heartbeat():
+    """إرسال نبضة قلب دورية (كل 24 ساعة) لتأكيد أن البوت يعمل بانتظام"""
+    now = datetime.utcnow()
+    send_hb = False
+    if os.path.exists(HEARTBEAT_FILE):
+        try:
+            with open(HEARTBEAT_FILE, "r") as f:
+                last_time = datetime.fromisoformat(f.read().strip())
+                if (now - last_time) >= timedelta(hours=24):
+                    send_hb = True
+        except Exception:
+            send_hb = True
+    else:
+        send_hb = True
+
+    if send_hb:
+        send_telegram_message("💓 *Balanced Bot Heartbeat:* البوت يعمل بشكل سليم ومستقر ومتصل بنجاح.")
+        try:
+            with open(HEARTBEAT_FILE, "w") as f:
+                f.write(now.isoformat())
+        except Exception as e:
+            logging.error(f"Error writing heartbeat file: {e}")
+
+def save_closed_trade(trade_data):
+    """حفظ تفاصيل الصفقة المغلقة في أرشيف مستقل لتحليل الأداء"""
+    file_exists = os.path.exists(CLOSED_FILE)
+    df = pd.DataFrame([trade_data])
+    try:
+        df.to_csv(CLOSED_FILE, mode='a', header=not file_exists, index=False)
+    except Exception as e:
+        logging.error(f"Error saving closed trade: {e}")
+
+def send_performance_summary(current_balance):
+    """إرسال تقرير الأداء اليومي وملخص الإحصائيات (Win Rate)"""
+    if not os.path.exists(CLOSED_FILE):
+        return
+    try:
+        df = pd.read_csv(CLOSED_FILE)
+        if df.empty:
+            return
+        total_trades = len(df)
+        wins = len(df[df['Result'] == 'WIN'])
+        losses = len(df[df['Result'] == 'LOSS'])
+        win_rate = (wins / total_trades) * 100 if total_trades > 0 else 0
+        total_pnl = df['PnL'].sum()
+
+        msg = (
+            f"📊 *تقرير الأداء الدوري - Balanced Bot*\n"
+            f"💰 الرصيد الحالي: `${current_balance:.2f}` USDT\n"
+            f"📈 إجمالي الصفقات: `{total_trades}`\n"
+            f"🏆 صفقات رابحة: `{wins}` | ❌ خاسرة: `{losses}`\n"
+            f"🎯 نسبة النجاح (Win Rate): `{win_rate:.1f}%`\n"
+            f"💵 صافي الأرباح/الخسائر: `${pnl_sign}{total_pnl:.2f}`"
+        )
+        # سيتم استخدام الإشارة لصافي الأرباح
+        msg = msg.replace(f"${pnl_sign if 'pnl_sign' in locals() else ''}", f"${'+' if total_pnl >= 0 else ''}")
+        send_telegram_message(msg)
+    except Exception as e:
+        logging.error(f"Error generating performance summary: {e}")
 
 def get_coinbase_candles(product_id, granularity=3600, limit=100):
     url = f"https://api.exchange.coinbase.com/products/{product_id}/candles?granularity={granularity}"
@@ -85,280 +151,3 @@ def detect_support_resistance_and_fvg(df):
     
     support = df['low'].tail(15).min()
     resistance = df['high'].tail(15).max()
-    
-    bullish_fvg = prev['low'] > prev2['high']
-    bearish_fvg = prev['high'] < prev2['low']
-    
-    return support, resistance, bullish_fvg, bearish_fvg
-
-def manage_balanced_paper_trades(current_prices):
-    trade_file = "active_balanced_trades.csv"
-    balance_file = "balanced_balance.txt"
-    
-    if os.path.exists(balance_file):
-        try:
-            with open(balance_file, "r") as f:
-                current_balance = float(f.read().strip())
-        except Exception:
-            current_balance = INITIAL_BALANCE
-    else:
-        current_balance = INITIAL_BALANCE
-
-    if not os.path.exists(trade_file):
-        return current_balance
-
-    try:
-        trades_df = pd.read_csv(trade_file)
-    except Exception as e:
-        logging.error(f"Error reading {trade_file}: {e}")
-        return current_balance
-
-    if trades_df.empty:
-        return current_balance
-
-    updated_trades = []
-    for index, row in trades_df.iterrows():
-        symbol = row['Symbol']
-        side = row['Side']
-        entry_price = row['Entry']
-        tp1 = row['TP1']
-        tp2 = row['TP2']
-        tp3 = row['TP3']
-        sl = row['SL']
-        qty = row['Qty']
-        
-        if symbol in current_prices:
-            curr_price = current_prices[symbol]
-            
-            if side == "LONG":
-                if curr_price >= (entry_price + (tp1 - entry_price) * 0.5) and sl < entry_price:
-                    sl = entry_price
-                    row['SL'] = sl
-                    send_telegram_message(f"🔄 *Balanced Trailing Stop ({symbol} LONG)*\nStop Loss moved to Entry Price: `{sl:.3f}`")
-
-                if curr_price >= tp1:
-                    profit = (tp1 - entry_price) * qty
-                    current_balance += profit
-                    send_telegram_message(f"🎯 *Balanced TP1 Reached! ({symbol} LONG)*\nProfit: `+${profit:.2f}`\nBalance: `${current_balance:.2f}`")
-                    continue
-                elif curr_price <= sl:
-                    loss = (entry_price - sl) * qty if sl < entry_price else 0
-                    current_balance -= loss
-                    send_telegram_message(f"🛑 *Balanced Stop Loss Hit! ({symbol} LONG)*\nLoss: `-${loss:.2f}`\nBalance: `${current_balance:.2f}`")
-                    continue
-                    
-            elif side == "SHORT":
-                if curr_price <= (entry_price - (entry_price - tp1) * 0.5) and sl > entry_price:
-                    sl = entry_price
-                    row['SL'] = sl
-                    send_telegram_message(f"🔄 *Balanced Trailing Stop ({symbol} SHORT)*\nStop Loss moved to Entry Price: `{sl:.3f}`")
-
-                if curr_price <= tp1:
-                    profit = (entry_price - tp1) * qty
-                    current_balance += profit
-                    send_telegram_message(f"🎯 *Balanced TP1 Reached! ({symbol} SHORT)*\nProfit: `+${profit:.2f}`\nBalance: `${current_balance:.2f}`")
-                    continue
-                elif curr_price >= sl:
-                    loss = (sl - entry_price) * qty if sl > entry_price else 0
-                    current_balance -= loss
-                    send_telegram_message(f"🛑 *Balanced Stop Loss Hit! ({symbol} SHORT)*\nLoss: `-${loss:.2f}`\nBalance: `${current_balance:.2f}`")
-                    continue
-        
-        updated_trades.append(row)
-
-    if len(updated_trades) > 0:
-        pd.DataFrame(updated_trades).to_csv(trade_file, index=False)
-    else:
-        pd.DataFrame(columns=['Symbol', 'Side', 'Entry', 'TP1', 'TP2', 'TP3', 'SL', 'Qty']).to_csv(trade_file, index=False)
-
-    try:
-        with open(balance_file, "w") as f:
-            f.write(str(current_balance))
-    except Exception as e:
-        logging.error(f"Error writing balance file: {e}")
-
-    return current_balance
-
-def run_balanced_bot():
-    print("⚖️ Balanced Bot Scan (Bilateral with S/R, FVG & Paper Trading) Started...")
-    
-    balance_file = "balanced_balance.txt"
-    if os.path.exists(balance_file):
-        try:
-            with open(balance_file, "r") as f:
-                account_balance = float(f.read().strip())
-        except Exception:
-            account_balance = INITIAL_BALANCE
-    else:
-        account_balance = INITIAL_BALANCE
-
-    current_prices_map = {}
-    scan_results = []
-    new_trades = []
-    
-    trade_file = "active_balanced_trades.csv"
-    if os.path.exists(trade_file) and os.path.getsize(trade_file) > 0:
-        try:
-            active_trades_df = pd.read_csv(trade_file)
-        except Exception:
-            active_trades_df = pd.DataFrame(columns=['Symbol', 'Side', 'Entry', 'TP1', 'TP2', 'TP3', 'SL', 'Qty'])
-    else:
-        active_trades_df = pd.DataFrame(columns=['Symbol', 'Side', 'Entry', 'TP1', 'TP2', 'TP3', 'SL', 'Qty'])
-
-    # حساب إجمالي الهامش المستخدم حالياً في الصفقات المفتوحة
-    current_total_margin = 0.0
-    if not active_trades_df.empty and 'Qty' in active_trades_df.columns and 'Entry' in active_trades_df.columns:
-        for _, r in active_trades_df.iterrows():
-            current_total_margin += (r['Qty'] * r['Entry']) / LEVERAGE
-
-    for symbol, cb_product in COINBASE_PRODUCTS.items():
-        df = get_coinbase_candles(cb_product, granularity=3600, limit=100)
-        
-        if df is None or len(df) < 30:
-            continue
-            
-        df['atr'] = calculate_atr(df, 14)
-        current_price = df['close'].iloc[-1]
-        current_atr = df['atr'].iloc[-1] if not np.isnan(df['atr'].iloc[-1]) else (current_price * 0.01)
-        
-        current_prices_map[symbol] = current_price
-        
-        support, resistance, bullish_fvg, bearish_fvg = detect_support_resistance_and_fvg(df)
-        
-        already_open = False
-        if not active_trades_df.empty and symbol in active_trades_df['Symbol'].values:
-            already_open = True
-
-        signal_status = "No Signal"
-
-        # 1. شروط صفقة شراء (LONG)
-        is_near_support = abs(current_price - support) <= (current_atr * 1.5)
-        if (is_near_support or bullish_fvg) and not already_open:
-            signal_status = "BALANCED LONG"
-            entry_price = current_price
-            sl = round(support - (current_atr * 1.0), 4)
-            
-            risk_unit = entry_price - sl
-            tp1 = round(entry_price + (risk_unit * 1.0), 4)
-            tp2 = round(entry_price + (risk_unit * 2.0), 4)
-            tp3_calc = round(entry_price + (risk_unit * 3.5), 4)
-            tp3 = max(resistance, tp3_calc) if resistance > entry_price else tp3_calc
-            
-            risk_amount = account_balance * RISK_PERCENTAGE
-            risk_per_unit = risk_unit
-            position_size = risk_amount / risk_per_unit if risk_per_unit > 0 else 0.01
-            position_value = position_size * entry_price
-            margin_required = position_value / LEVERAGE
-            
-            max_allowed_total_margin = account_balance * MAX_TOTAL_MARGIN_RATIO
-            if (current_total_margin + margin_required) > max_allowed_total_margin:
-                available_margin_for_new = max_allowed_total_margin - current_total_margin
-                if available_margin_for_new > 5.0:
-                    margin_required = available_margin_for_new
-                    position_size = (margin_required * LEVERAGE) / entry_price
-                else:
-                    print(f"⚠️ Skipped {symbol} LONG: Margin limit reached.")
-                    continue
-
-            current_total_margin += margin_required
-
-            new_trades.append({
-                'Symbol': symbol,
-                'Side': 'LONG',
-                'Entry': entry_price,
-                'TP1': tp1,
-                'TP2': tp2,
-                'TP3': tp3,
-                'SL': sl,
-                'Qty': position_size
-            })
-
-            message = (
-                f"⚖️ *Balanced Bot: {symbol}*\n"
-                f"🟢 *New LONG Position Opened*\n"
-                f"💰 Entry: `{entry_price}`\n"
-                f"🎯 TP1: `{tp1}` | TP2: `{tp2}` | TP3: `{tp3}`\n"
-                f"🛑 Stop Loss: `{sl}`\n"
-                f"⚖ *Risk & Leverage ({LEVERAGE}x):*\n"
-                f"• Qty: `{position_size:.4f}`\n"
-                f"• Margin: `${margin_required:.2f}`\n"
-                f"💼 *Balance:* `${account_balance:.2f}` USDT"
-            )
-            send_telegram_message(message)
-
-        # 2. شروط صفقة بيع (SHORT)
-        is_near_resistance = abs(current_price - resistance) <= (current_atr * 1.5)
-        if (is_near_resistance or bearish_fvg) and not already_open and signal_status == "No Signal":
-            signal_status = "BALANCED SHORT"
-            entry_price = current_price
-            sl = round(resistance + (current_atr * 1.0), 4)
-            
-            risk_unit = sl - entry_price
-            tp1 = round(entry_price - (risk_unit * 1.0), 4)
-            tp2 = round(entry_price - (risk_unit * 2.0), 4)
-            tp3_calc = round(entry_price - (risk_unit * 3.5), 4)
-            tp3 = min(support, tp3_calc) if support < entry_price else tp3_calc
-            
-            risk_amount = account_balance * RISK_PERCENTAGE
-            risk_per_unit = risk_unit
-            position_size = risk_amount / risk_per_unit if risk_per_unit > 0 else 0.01
-            position_value = position_size * entry_price
-            margin_required = position_value / LEVERAGE
-            
-            max_allowed_total_margin = account_balance * MAX_TOTAL_MARGIN_RATIO
-            if (current_total_margin + margin_required) > max_allowed_total_margin:
-                available_margin_for_new = max_allowed_total_margin - current_total_margin
-                if available_margin_for_new > 5.0:
-                    margin_required = available_margin_for_new
-                    position_size = (margin_required * LEVERAGE) / entry_price
-                else:
-                    print(f"⚠️ Skipped {symbol} SHORT: Margin limit reached.")
-                    continue
-
-            current_total_margin += margin_required
-
-            new_trades.append({
-                'Symbol': symbol,
-                'Side': 'SHORT',
-                'Entry': entry_price,
-                'TP1': tp1,
-                'TP2': tp2,
-                'TP3': tp3,
-                'SL': sl,
-                'Qty': position_size
-            })
-
-            message = (
-                f"⚖️ *Balanced Bot: {symbol}*\n"
-                f"🔴 *New SHORT Position Opened*\n"
-                f"💰 Entry: `{entry_price}`\n"
-                f"🎯 TP1: `{tp1}` | TP2: `{tp2}` | TP3: `{tp3}`\n"
-                f"🛑 Stop Loss: `{sl}`\n"
-                f"⚖ *Risk & Leverage ({LEVERAGE}x):*\n"
-                f"• Qty: `{position_size:.4f}`\n"
-                f"• Margin: `${margin_required:.2f}`\n"
-                f"💼 *Balance:* `${account_balance:.2f}` USDT"
-            )
-            send_telegram_message(message)
-
-        scan_results.append({
-            "Timestamp": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-            "Bot_Type": "Balanced_Bot",
-            "Symbol": symbol,
-            "Price": current_price,
-            "Signal": signal_status
-        })
-        
-    account_balance = manage_balanced_paper_trades(current_prices_map)
-
-    if len(new_trades) > 0:
-        new_df = pd.DataFrame(new_trades)
-        updated_active = pd.concat([active_trades_df, new_df], ignore_index=True)
-        updated_active.to_csv(trade_file, index=False)
-
-    log_df = pd.DataFrame(scan_results)
-    log_df.to_csv("bot_activity_log_balanced.csv", index=False)
-    print(f"⚖️ Balanced Bot Scan Finished. Current Balance: ${account_balance:.2f}")
-
-if __name__ == "__main__":
-    run_balanced_bot()
