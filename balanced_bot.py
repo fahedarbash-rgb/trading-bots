@@ -50,7 +50,6 @@ def send_telegram_message(message):
         logging.error(error_msg)
 
 def check_heartbeat():
-    """إرسال نبضة قلب دورية (كل 24 ساعة) لتأكيد أن البوت يعمل بانتظام"""
     now = datetime.utcnow()
     send_hb = False
     if os.path.exists(HEARTBEAT_FILE):
@@ -65,7 +64,7 @@ def check_heartbeat():
         send_hb = True
 
     if send_hb:
-        send_telegram_message("💓 *Balanced Bot Heartbeat:* البوت يعمل بشكل سليم ومستقر ومتصل بنجاح.")
+        send_telegram_message("💓 *Balanced Bot Heartbeat:* البوت يعمل بكفاءة عالية وجاهز لاقتناص الصفقات.")
         try:
             with open(HEARTBEAT_FILE, "w") as f:
                 f.write(now.isoformat())
@@ -73,41 +72,12 @@ def check_heartbeat():
             logging.error(f"Error writing heartbeat file: {e}")
 
 def save_closed_trade(trade_data):
-    """حفظ تفاصيل الصفقة المغلقة في أرشيف مستقل لتحليل الأداء"""
     file_exists = os.path.exists(CLOSED_FILE)
     df = pd.DataFrame([trade_data])
     try:
         df.to_csv(CLOSED_FILE, mode='a', header=not file_exists, index=False)
     except Exception as e:
         logging.error(f"Error saving closed trade: {e}")
-
-def send_performance_summary(current_balance):
-    """إرسال تقرير الأداء اليومي وملخص الإحصائيات (Win Rate)"""
-    if not os.path.exists(CLOSED_FILE):
-        return
-    try:
-        df = pd.read_csv(CLOSED_FILE)
-        if df.empty:
-            return
-        total_trades = len(df)
-        wins = len(df[df['Result'] == 'WIN'])
-        losses = len(df[df['Result'] == 'LOSS'])
-        win_rate = (wins / total_trades) * 100 if total_trades > 0 else 0
-        total_pnl = df['PnL'].sum()
-
-        msg = (
-            f"📊 *تقرير الأداء الدوري - Balanced Bot*\n"
-            f"💰 الرصيد الحالي: `${current_balance:.2f}` USDT\n"
-            f"📈 إجمالي الصفقات: `{total_trades}`\n"
-            f"🏆 صفقات رابحة: `{wins}` | ❌ خاسرة: `{losses}`\n"
-            f"🎯 نسبة النجاح (Win Rate): `{win_rate:.1f}%`\n"
-            f"💵 صافي الأرباح/الخسائر: `${pnl_sign}{total_pnl:.2f}`"
-        )
-        # سيتم استخدام الإشارة لصافي الأرباح
-        msg = msg.replace(f"${pnl_sign if 'pnl_sign' in locals() else ''}", f"${'+' if total_pnl >= 0 else ''}")
-        send_telegram_message(msg)
-    except Exception as e:
-        logging.error(f"Error generating performance summary: {e}")
 
 def get_coinbase_candles(product_id, granularity=3600, limit=100):
     url = f"https://api.exchange.coinbase.com/products/{product_id}/candles?granularity={granularity}"
@@ -138,6 +108,13 @@ def get_coinbase_candles(product_id, granularity=3600, limit=100):
         logging.error(error_msg)
         return None
 
+def calculate_rsi(series, period=14):
+    delta = series.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    rs = gain / loss
+    return 100 - (100 / (1 + rs))
+
 def calculate_atr(df, period=14):
     high_low = df['high'] - df['low']
     high_close = np.abs(df['high'] - df['close'].shift())
@@ -145,9 +122,128 @@ def calculate_atr(df, period=14):
     tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
     return tr.rolling(window=period).mean()
 
-def detect_support_resistance_and_fvg(df):
-    prev = df.iloc[-2]
-    prev2 = df.iloc[-3]
-    
-    support = df['low'].tail(15).min()
-    resistance = df['high'].tail(15).max()
+def manage_and_scan_market():
+    # قراءة الرصيد الحالي
+    current_balance = INITIAL_BALANCE
+    if os.path.exists(BALANCE_FILE):
+        try:
+            with open(BALANCE_FILE, "r") as f:
+                current_balance = float(f.read().strip())
+        except Exception:
+            pass
+
+    # 1. إدارة الصفقات المفتوحة مسبقاً وتحديثها
+    active_trades = []
+    if os.path.exists(TRADE_FILE):
+        try:
+            active_trades = pd.read_csv(TRADE_FILE).to_dict('records')
+        except Exception:
+            pass
+
+    updated_trades = []
+    open_symbols = [t['Symbol'] for t in active_trades]
+
+    for trade in active_trades:
+        symbol = trade['Symbol']
+        df = get_coinbase_candles(COINBASE_PRODUCTS.get(symbol, "BTC-USD"), granularity=3600, limit=5)
+        if df is None or df.empty:
+            updated_trades.append(trade)
+            continue
+            
+        curr_price = df.iloc[-1]['close']
+        entry = trade['Entry']
+        tp1 = trade['TP1']
+        sl = trade['SL']
+        qty = trade['Qty']
+        side = trade['Side']
+
+        closed = False
+        if side == "LONG":
+            if curr_price >= tp1:
+                profit = (tp1 - entry) * qty
+                current_balance += profit
+                send_telegram_message(f"🎯 *Balanced TP Reached! (LONG {symbol})*\nProfit: `+${profit:.2f}`\nBalance: `${current_balance:.2f}`")
+                save_closed_trade({'Timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), 'Symbol': symbol, 'Side': side, 'Entry': entry, 'Exit': tp1, 'Result': 'WIN', 'PnL': round(profit, 2)})
+                closed = True
+            elif curr_price <= sl:
+                loss = (entry - sl) * qty
+                current_balance -= loss
+                send_telegram_message(f"🛑 *Balanced Stop Loss Hit! (LONG {symbol})*\nLoss: `-${loss:.2f}`\nBalance: `${current_balance:.2f}`")
+                save_closed_trade({'Timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), 'Symbol': symbol, 'Side': side, 'Entry': entry, 'Exit': sl, 'Result': 'LOSS', 'PnL': round(-loss, 2)})
+                closed = True
+        elif side == "SHORT":
+            if curr_price <= tp1:
+                profit = (entry - tp1) * qty
+                current_balance += profit
+                send_telegram_message(f"🎯 *Balanced TP Reached! (SHORT {symbol})*\nProfit: `+${profit:.2f}`\nBalance: `${current_balance:.2f}`")
+                save_closed_trade({'Timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), 'Symbol': symbol, 'Side': side, 'Entry': entry, 'Exit': tp1, 'Result': 'WIN', 'PnL': round(profit, 2)})
+                closed = True
+            elif curr_price >= sl:
+                loss = (sl - entry) * qty
+                current_balance -= loss
+                send_telegram_message(f"🛑 *Balanced Stop Loss Hit! (SHORT {symbol})*\nLoss: `-${loss:.2f}`\nBalance: `${current_balance:.2f}`")
+                save_closed_trade({'Timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), 'Symbol': symbol, 'Side': side, 'Entry': entry, 'Exit': sl, 'Result': 'LOSS', 'PnL': round(-loss, 2)})
+                closed = True
+
+        if not closed:
+            updated_trades.append(trade)
+
+    # 2. فحص السوق لاقتناص صفقات جديدة إذا لم نتجاوز حد الأمان
+    if len(updated_trades) < 3: # السماح بفتح حتى 3 صفقات كحد أقصى بالتوازي
+        for symbol, coinbase_id in COINBASE_PRODUCTS.items():
+            if symbol in open_symbols:
+                continue
+                
+            df = get_coinbase_candles(coinbase_id, granularity=3600, limit=50)
+            if df is None or len(df) < 20:
+                continue
+                
+            df['rsi'] = calculate_rsi(df['close'], 14)
+            df['atr'] = calculate_atr(df, 14)
+            
+            curr_price = df.iloc[-1]['close']
+            curr_rsi = df.iloc[-1]['rsi']
+            curr_atr = df.iloc[-1]['atr']
+            avg_volume = df['volume'].tail(10).mean()
+            curr_volume = df.iloc[-1]['volume']
+
+            # شروط قنص صفقة صعودية (LONG): RSI منخفض ومقاومة للفوليوم
+            if curr_rsi < 35 and curr_volume > (avg_volume * 1.1):
+                entry = curr_price
+                sl = entry - (curr_atr * 1.5)
+                tp1 = entry + (curr_atr * 2.0)
+                risk_amount = current_balance * RISK_PERCENTAGE
+                qty = risk_amount / (entry - sl) if (entry - sl) > 0 else 1.0
+                margin = (entry * qty) / LEVERAGE
+
+                if margin <= (current_balance * MAX_TOTAL_MARGIN_RATIO):
+                    new_trade = {
+                        'Symbol': symbol, 'Side': 'LONG', 'Entry': entry,
+                        'TP1': tp1, 'TP2': tp1 * 1.02, 'SL': sl, 'Qty': qty
+                    }
+                    updated_trades.append(new_trade)
+                    open_symbols.append(symbol)
+                    
+                    msg = (
+                        f"🚀 *Balanced Bot: New LONG Signal!*\n"
+                        f"🔹 Symbol: `{symbol}`\n"
+                        f"💰 Entry: `{entry:.4f}`\n"
+                        f"🎯 TP1: `{tp1:.4f}` | 🛑 SL: `{sl:.4f}`\n"
+                        f"📊 RSI: `{curr_rsi:.1f}` | Qty: `{qty:.4f}`"
+                    )
+                    send_telegram_message(msg)
+                    break # فتح صفقة واحدة في كل دورة تشغيل كحد أقصى
+
+    # حفظ الصفقات النشطة الجديدة والملفات
+    if updated_trades:
+        pd.DataFrame(updated_trades).to_csv(TRADE_FILE, index=False)
+    else:
+        if os.path.exists(TRADE_FILE):
+            os.remove(TRADE_FILE)
+
+    with open(BALANCE_FILE, "w") as f:
+        f.write(str(current_balance))
+
+if __name__ == "__main__":
+    check_heartbeat()
+    manage_and_scan_market()
