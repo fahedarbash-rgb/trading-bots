@@ -1,8 +1,16 @@
 import os
+import logging
 import requests
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime
+
+# --- إعداد نظام تسجيل الأخطاء (Error Logging) ---
+logging.basicConfig(
+    filename='bot_errors.log',
+    level=logging.ERROR,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
 
 # --- إعدادات تيليجرام ---
 TELEGRAM_BOT_TOKEN = "8772493944:AAGb4Y1VuBLrCq0vfvnhue7oRW4hjf_LYJE"
@@ -31,7 +39,9 @@ def send_telegram_message(message):
         response = requests.post(url, json=payload, timeout=10)
         print(f"Telegram Response: {response.status_code}")
     except Exception as e:
-        print(f"Error: {e}")
+        error_msg = f"Telegram Error: {e}"
+        print(error_msg)
+        logging.error(error_msg)
 
 def get_coinbase_candles(product_id, granularity=3600, limit=100):
     url = f"https://api.exchange.coinbase.com/products/{product_id}/candles?granularity={granularity}"
@@ -57,7 +67,9 @@ def get_coinbase_candles(product_id, granularity=3600, limit=100):
             df = df.tail(limit).reset_index(drop=True)
         return df
     except Exception as e:
-        print(f"Error fetching {product_id}: {e}")
+        error_msg = f"Error fetching {product_id}: {e}"
+        print(error_msg)
+        logging.error(error_msg)
         return None
 
 def calculate_atr(df, period=14):
@@ -84,15 +96,23 @@ def manage_balanced_paper_trades(current_prices):
     balance_file = "balanced_balance.txt"
     
     if os.path.exists(balance_file):
-        with open(balance_file, "r") as f:
-            current_balance = float(f.read().strip())
+        try:
+            with open(balance_file, "r") as f:
+                current_balance = float(f.read().strip())
+        except Exception:
+            current_balance = INITIAL_BALANCE
     else:
         current_balance = INITIAL_BALANCE
 
     if not os.path.exists(trade_file):
         return current_balance
 
-    trades_df = pd.read_csv(trade_file)
+    try:
+        trades_df = pd.read_csv(trade_file)
+    except Exception as e:
+        logging.error(f"Error reading {trade_file}: {e}")
+        return current_balance
+
     if trades_df.empty:
         return current_balance
 
@@ -149,10 +169,13 @@ def manage_balanced_paper_trades(current_prices):
     if len(updated_trades) > 0:
         pd.DataFrame(updated_trades).to_csv(trade_file, index=False)
     else:
-        pd.DataFrame(columns=trades_df.columns).to_csv(trade_file, index=False)
+        pd.DataFrame(columns=['Symbol', 'Side', 'Entry', 'TP1', 'TP2', 'TP3', 'SL', 'Qty']).to_csv(trade_file, index=False)
 
-    with open(balance_file, "w") as f:
-        f.write(str(current_balance))
+    try:
+        with open(balance_file, "w") as f:
+            f.write(str(current_balance))
+    except Exception as e:
+        logging.error(f"Error writing balance file: {e}")
 
     return current_balance
 
@@ -161,8 +184,11 @@ def run_balanced_bot():
     
     balance_file = "balanced_balance.txt"
     if os.path.exists(balance_file):
-        with open(balance_file, "r") as f:
-            account_balance = float(f.read().strip())
+        try:
+            with open(balance_file, "r") as f:
+                account_balance = float(f.read().strip())
+        except Exception:
+            account_balance = INITIAL_BALANCE
     else:
         account_balance = INITIAL_BALANCE
 
@@ -172,13 +198,16 @@ def run_balanced_bot():
     
     trade_file = "active_balanced_trades.csv"
     if os.path.exists(trade_file) and os.path.getsize(trade_file) > 0:
-        active_trades_df = pd.read_csv(trade_file)
+        try:
+            active_trades_df = pd.read_csv(trade_file)
+        except Exception:
+            active_trades_df = pd.DataFrame(columns=['Symbol', 'Side', 'Entry', 'TP1', 'TP2', 'TP3', 'SL', 'Qty'])
     else:
         active_trades_df = pd.DataFrame(columns=['Symbol', 'Side', 'Entry', 'TP1', 'TP2', 'TP3', 'SL', 'Qty'])
 
     # حساب إجمالي الهامش المستخدم حالياً في الصفقات المفتوحة
     current_total_margin = 0.0
-    if not active_trades_df.empty:
+    if not active_trades_df.empty and 'Qty' in active_trades_df.columns and 'Entry' in active_trades_df.columns:
         for _, r in active_trades_df.iterrows():
             current_total_margin += (r['Qty'] * r['Entry']) / LEVERAGE
 
@@ -221,12 +250,10 @@ def run_balanced_bot():
             position_value = position_size * entry_price
             margin_required = position_value / LEVERAGE
             
-            # التحقق من أن الهامش الإجمالي لا يتجاوز الحد الأقصى المسموح به من الرصيد
             max_allowed_total_margin = account_balance * MAX_TOTAL_MARGIN_RATIO
             if (current_total_margin + margin_required) > max_allowed_total_margin:
-                # إذا تجاوز الحد، نقوم بتعديل الهامش المتاح لهذه الصفقة أو تخطيها لتفادي المخاطر
                 available_margin_for_new = max_allowed_total_margin - current_total_margin
-                if available_margin_for_new > 5.0: # السماح فقط إذا كان هناك رصيد هامش كافٍ ومجدي
+                if available_margin_for_new > 5.0:
                     margin_required = available_margin_for_new
                     position_size = (margin_required * LEVERAGE) / entry_price
                 else:
