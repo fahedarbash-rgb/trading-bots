@@ -13,7 +13,7 @@ INITIAL_BALANCE = 200.0
 RISK_PERCENTAGE = 0.02        
 LEVERAGE = 3                  
 
-# --- سلة العملات المعتمدة (صيغة كوينبيس لتفادي حظر بينانس) ---
+# --- سلة العملات المعتمدة ---
 COINBASE_PRODUCTS = {
     "BTCUSDT": "BTC-USD",
     "ETHUSDT": "ETH-USD",
@@ -24,7 +24,6 @@ COINBASE_PRODUCTS = {
 }
 
 def send_telegram_message(message):
-    """إرسال التنبيهات إلى تيليجرام"""
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "Markdown"}
     try:
@@ -34,7 +33,6 @@ def send_telegram_message(message):
         print(f"Error: {e}")
 
 def get_coinbase_candles(product_id, granularity=3600, limit=100):
-    """جلب البيانات التاريخية من Coinbase API لتفادي الحظر الجغرافي"""
     url = f"https://api.exchange.coinbase.com/products/{product_id}/candles?granularity={granularity}"
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
@@ -62,7 +60,6 @@ def get_coinbase_candles(product_id, granularity=3600, limit=100):
         return None
 
 def calculate_atr(df, period=14):
-    """حساب المدى الحقيقي المتوسط (ATR) للتقلب"""
     high_low = df['high'] - df['low']
     high_close = np.abs(df['high'] - df['close'].shift())
     low_close = np.abs(df['low'] - df['close'].shift())
@@ -70,7 +67,6 @@ def calculate_atr(df, period=14):
     return tr.rolling(window=period).mean()
 
 def detect_support_resistance_and_fvg(df):
-    """تحديد الدعم والمقاومة الهيكلية وفجوات الشموع (FVG)"""
     prev = df.iloc[-2]
     prev2 = df.iloc[-3]
     
@@ -83,7 +79,6 @@ def detect_support_resistance_and_fvg(df):
     return support, resistance, bullish_fvg, bearish_fvg
 
 def manage_balanced_paper_trades(current_prices):
-    """إدارة الصفقات المفتوحة (تتبع الـ TP والـ SL ونظام تأمين الصفقة Break-Even)"""
     trade_file = "active_balanced_trades.csv"
     balance_file = "balanced_balance.txt"
     
@@ -103,7 +98,7 @@ def manage_balanced_paper_trades(current_prices):
     updated_trades = []
     for index, row in trades_df.iterrows():
         symbol = row['Symbol']
-        side = row['Side'] # LONG أو SHORT
+        side = row['Side']
         entry_price = row['Entry']
         tp1 = row['TP1']
         tp2 = row['TP2']
@@ -115,7 +110,6 @@ def manage_balanced_paper_trades(current_prices):
             curr_price = current_prices[symbol]
             
             if side == "LONG":
-                # تفعيل وقف الخسارة المتحرك (Break-Even) عند الوصول لنصف المسافة نحو TP1
                 if curr_price >= (entry_price + (tp1 - entry_price) * 0.5) and sl < entry_price:
                     sl = entry_price
                     row['SL'] = sl
@@ -133,7 +127,6 @@ def manage_balanced_paper_trades(current_prices):
                     continue
                     
             elif side == "SHORT":
-                # تفعيل وقف الخسارة المتحرك للـ Short
                 if curr_price <= (entry_price - (entry_price - tp1) * 0.5) and sl > entry_price:
                     sl = entry_price
                     row['SL'] = sl
@@ -209,15 +202,24 @@ def run_balanced_bot():
             entry_price = current_price
             sl = round(support - (current_atr * 1.0), 4)
             
-            tp1 = round(entry_price + (entry_price - sl) * 1.0, 4)
-            tp2 = round(entry_price + (entry_price - sl) * 2.0, 4)
-            tp3 = round(resistance, 4) if resistance > entry_price else round(entry_price + (entry_price - sl) * 3.5, 4)
+            # ترتيب الأهداف تصاعدياً بدقة
+            risk_unit = entry_price - sl
+            tp1 = round(entry_price + (risk_unit * 1.0), 4)
+            tp2 = round(entry_price + (risk_unit * 2.0), 4)
+            tp3_calc = round(entry_price + (risk_unit * 3.5), 4)
+            tp3 = max(resistance, tp3_calc) if resistance > entry_price else tp3_calc
             
+            # إدارة المخاطر وتحديد حجم الصفقة بما يتناسب مع رأس المال
             risk_amount = account_balance * RISK_PERCENTAGE
-            risk_per_unit = entry_price - sl
+            risk_per_unit = risk_unit
             position_size = risk_amount / risk_per_unit if risk_per_unit > 0 else 0.01
             position_value = position_size * entry_price
             margin_required = position_value / LEVERAGE
+            
+            # حماية الهامش الافتراضي لئلا يتجاوز رصيد الحساب بالكامل
+            if margin_required > (account_balance * 0.8):
+                position_size = (account_balance * 0.8 * LEVERAGE) / entry_price
+                margin_required = (position_size * entry_price) / LEVERAGE
 
             new_trades.append({
                 'Symbol': symbol,
@@ -250,15 +252,22 @@ def run_balanced_bot():
             entry_price = current_price
             sl = round(resistance + (current_atr * 1.0), 4)
             
-            tp1 = round(entry_price - (sl - entry_price) * 1.0, 4)
-            tp2 = round(entry_price - (sl - entry_price) * 2.0, 4)
-            tp3 = round(support, 4) if support < entry_price else round(entry_price - (sl - entry_price) * 3.5, 4)
+            # ترتيب الأهداف تنازلياً بدقة للـ Short
+            risk_unit = sl - entry_price
+            tp1 = round(entry_price - (risk_unit * 1.0), 4)
+            tp2 = round(entry_price - (risk_unit * 2.0), 4)
+            tp3_calc = round(entry_price - (risk_unit * 3.5), 4)
+            tp3 = min(support, tp3_calc) if support < entry_price else tp3_calc
             
             risk_amount = account_balance * RISK_PERCENTAGE
-            risk_per_unit = sl - entry_price
+            risk_per_unit = risk_unit
             position_size = risk_amount / risk_per_unit if risk_per_unit > 0 else 0.01
             position_value = position_size * entry_price
             margin_required = position_value / LEVERAGE
+            
+            if margin_required > (account_balance * 0.8):
+                position_size = (account_balance * 0.8 * LEVERAGE) / entry_price
+                margin_required = (position_size * entry_price) / LEVERAGE
 
             new_trades.append({
                 'Symbol': symbol,
