@@ -64,7 +64,7 @@ def check_heartbeat():
         send_hb = True
 
     if send_hb:
-        send_telegram_message("💓 *Flexible Bot Heartbeat:* البوت المرن يعمل بكفاءة عالية وجاهز لاقتناص فرص الارتداد.")
+        send_telegram_message("💓 *Flexible Bot Heartbeat:* البوت المرن ثنائي الاتجاه (Long & Short) يعمل بكفاءة عالية وجاهز لاقتناص فرص الارتداد.")
         try:
             with open(HEARTBEAT_FILE, "w") as f:
                 f.write(now.isoformat())
@@ -138,7 +138,7 @@ def manage_and_scan_flexible_market():
         except Exception:
             pass
 
-    # 1. إدارة الصفقات المفتوحة مسبقاً
+    # 1. إدارة الصفقات المفتوحة مسبقاً (LONG & SHORT)
     active_trades = []
     if os.path.exists(TRADE_FILE):
         try:
@@ -194,7 +194,7 @@ def manage_and_scan_flexible_market():
         if not closed:
             updated_trades.append(trade)
 
-    # 2. فحص السوق لاقتناص صفقات الارتداد (Mean Reversion) الجديدة
+    # 2. فحص السوق لاقتناص صفقات الارتداد (Mean Reversion) الجديدة (LONG & SHORT)
     if len(updated_trades) < 3:
         for symbol, coinbase_id in COINBASE_PRODUCTS.items():
             if symbol in open_symbols:
@@ -212,17 +212,4 @@ def manage_and_scan_flexible_market():
             curr_rsi = df.iloc[-1]['rsi']
             lower_b = df.iloc[-1]['lower_band']
             upper_b = df.iloc[-1]['upper_band']
-            mid_b = df.iloc[-1]['mid_band']
-            curr_atr = df.iloc[-1]['atr']
-
-            # شروط LONG: السعر لامس الحد السفلي أو تحته بقليل + RSI تشبع بيعي
-            if curr_price <= lower_b and curr_rsi < 35:
-                entry = curr_price
-                sl = entry - (curr_atr * 1.5)
-                tp1 = mid_b  # الهدف هو العودة للمنتصف (Mean Reversion)
-                risk_amount = current_balance * RISK_PERCENTAGE
-                qty = risk_amount / (entry - sl) if (entry - sl) > 0 else 1.0
-                margin = (entry * qty) / LEVERAGE
-
-                if margin <= (current_balance * MAX_TOTAL_MARGIN_RATIO):
-                    new
+            mid_b = df
