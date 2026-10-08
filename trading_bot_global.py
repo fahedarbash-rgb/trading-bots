@@ -64,7 +64,7 @@ def check_heartbeat():
         send_hb = True
 
     if send_hb:
-        send_telegram_message("💓 *Global S&R Scanner Bot Heartbeat:* البوت المتقدم متعدد الأطر الزمنية يعمل بكفاءة عالية ويراقب الأسواق.")
+        send_telegram_message("💓 *Global S&R Scanner Bot Heartbeat:* البوت المتقدم ثنائي الاتجاه (Long & Short) يعمل بكفاءة عالية ويراقب الأسواق.")
         try:
             with open(HEARTBEAT_FILE, "w") as f:
                 f.write(now.isoformat())
@@ -87,7 +87,7 @@ def get_coinbase_candles(product_id, granularity=3600, limit=100):
         data = response.json()
         if not isinstance(data, list) or len(data) == 0:
             return None
-            
+
         df_list = []
         for item in reversed(data):
             df_list.append({
@@ -137,14 +137,14 @@ def manage_and_scan_sr_market():
     updated_trades = []
     open_symbols = [t['Symbol'] for t in active_trades]
 
-    # 1. إدارة الصفقات المفتوحة (متابعة السعر اللحظي على إطار الساعة)
+    # 1. إدارة الصفقات المفتوحة (متابعة السعر اللحظي على إطار الساعة لـ LONG و SHORT)
     for trade in active_trades:
         symbol = trade['Symbol']
         df = get_coinbase_candles(GLOBAL_PRODUCTS.get(symbol, "BTC-USD"), granularity=3600, limit=5)
         if df is None or df.empty:
             updated_trades.append(trade)
             continue
-            
+
         curr_price = df.iloc[-1]['close']
         entry = trade['Entry']
         tp1 = trade['TP1']
@@ -183,24 +183,24 @@ def manage_and_scan_sr_market():
         if not closed:
             updated_trades.append(trade)
 
-    # 2. فحص السوق عبر نظام الأطر الزمنية المتعددة (Daily + 4H + 1H + 15m)
+    # 2. فحص السوق عبر نظام الأطر الزمنية المتعددة (Daily + 4H + 1H + 15m) ثنائي الاتجاه
     if len(updated_trades) < 4:
         for symbol, coinbase_id in GLOBAL_PRODUCTS.items():
             if symbol in open_symbols:
                 continue
-                
+
             # جلب البيانات للأطر الزمنية المختلفة
             df_daily = get_coinbase_candles(coinbase_id, granularity=86400, limit=50) # يومي
             df_4h = get_coinbase_candles(coinbase_id, granularity=21600, limit=50)    # 4 ساعات
             df_1h = get_coinbase_candles(coinbase_id, granularity=3600, limit=60)     # ساعة
             df_15m = get_coinbase_candles(coinbase_id, granularity=900, limit=30)     # 15 دقيقة
-            
+
             if (df_daily is None or len(df_daily) < 30 or 
                 df_4h is None or len(df_4h) < 30 or 
                 df_1h is None or len(df_1h) < 40 or 
                 df_15m is None or len(df_15m) < 10):
                 continue
-                
+
             # تحديد الاتجاه العام للإطار اليومي وإطار 4 ساعات (EMA 50)
             df_daily['ema50'] = df_daily['close'].ewm(span=50, adjust=False).mean()
             trend_daily = "BULLISH" if df_daily.iloc[-1]['close'] > df_daily.iloc[-1]['ema50'] else "BEARISH"
@@ -212,7 +212,7 @@ def manage_and_scan_sr_market():
             df_1h['atr'] = calculate_atr(df_1h, 14)
             df_1h['avg_volume'] = df_1h['volume'].rolling(window=20).mean()
             support, resistance = find_support_resistance(df_1h, window=30)
-            
+
             curr_price = df_1h.iloc[-1]['close']
             curr_volume = df_1h.iloc[-1]['volume']
             avg_volume = df_1h.iloc[-1]['avg_volume']
@@ -220,15 +220,15 @@ def manage_and_scan_sr_market():
 
             is_volume_confirmed = curr_volume >= (avg_volume * 0.9)
 
-            # تأكيد إضافي من إطار 15 دقيقة (التأكد من أن الشمعة الأخيرة تبدأ بالارتداد صعوداً أو هبوطاً)
+            # تأكيد إضافي من إطار 15 دقيقة
             last_15m_close = df_15m.iloc[-1]['close']
             prev_15m_close = df_15m.iloc[-2]['close']
 
-            # شروط صفقات الشراء LONG (توافق صاعد على اليومي والـ 4 ساعات + ارتداد 15 دقيقة)
+            # أ. شروط صفقات الشراء LONG (توافق صاعد على اليومي والـ 4 ساعات + ارتداد 15 دقيقة من الدعم)
             if (trend_daily == "BULLISH" and trend_4h == "BULLISH" and 
                 abs(curr_price - support) <= (curr_atr * 0.4) and curr_price >= support and 
                 is_volume_confirmed and last_15m_close >= prev_15m_close):
-                
+
                 entry = curr_price
                 sl = support - (curr_atr * 1.0)
                 tp1 = resistance
@@ -243,7 +243,7 @@ def manage_and_scan_sr_market():
                     }
                     updated_trades.append(new_trade)
                     open_symbols.append(symbol)
-                    
+
                     send_telegram_message(
                         f"🛡️ *Global S&R Bot: Confirmed LONG (3x | Multi-TF Confluence)*\n"
                         f"🔹 Symbol: `{symbol}` | Entry: `{entry:.4f}`\n"
@@ -254,11 +254,11 @@ def manage_and_scan_sr_market():
                     )
                     break
 
-            # شروط صفقات البيع SHORT (توافق هابط على اليومي والـ 4 ساعات + ارتداد 15 دقيقة)
+            # ب. شروط صفقات البيع SHORT (توافق هابط على اليومي والـ 4 ساعات + ارتداد 15 دقيقة من المقاومة)
             elif (trend_daily == "BEARISH" and trend_4h == "BEARISH" and 
                   abs(curr_price - resistance) <= (curr_atr * 0.4) and curr_price <= resistance and 
                   is_volume_confirmed and last_15m_close <= prev_15m_close):
-                
+
                 entry = curr_price
                 sl = resistance + (curr_atr * 1.0)
                 tp1 = support
@@ -273,7 +273,7 @@ def manage_and_scan_sr_market():
                     }
                     updated_trades.append(new_trade)
                     open_symbols.append(symbol)
-                    
+
                     send_telegram_message(
                         f"🛡️ *Global S&R Bot: Confirmed SHORT (3x | Multi-TF Confluence)*\n"
                         f"🔹 Symbol: `{symbol}` | Entry: `{entry:.4f}`\n"
