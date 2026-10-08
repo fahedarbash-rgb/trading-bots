@@ -64,7 +64,7 @@ def check_heartbeat():
         send_hb = True
 
     if send_hb:
-        send_telegram_message("💓 *Balanced Bot Heartbeat:* البوت يعمل بكفاءة عالية وجاهز لاقتناص الصفقات.")
+        send_telegram_message("💓 *Balanced Bot Heartbeat:* البوت المتوازن ثنائي الاتجاه (Long & Short) يعمل بكفاءة عالية وجاهز لاقتناص الصفقات.")
         try:
             with open(HEARTBEAT_FILE, "w") as f:
                 f.write(now.isoformat())
@@ -132,7 +132,7 @@ def manage_and_scan_market():
         except Exception:
             pass
 
-    # 1. إدارة الصفقات المفتوحة مسبقاً وتحديثها
+    # 1. إدارة الصفقات المفتوحة مسبقاً وتحديثها (LONG & SHORT)
     active_trades = []
     if os.path.exists(TRADE_FILE):
         try:
@@ -188,7 +188,7 @@ def manage_and_scan_market():
         if not closed:
             updated_trades.append(trade)
 
-    # 2. فحص السوق لاقتناص صفقات جديدة إذا لم نتجاوز حد الأمان
+    # 2. فحص السوق لاقتناص صفقات جديدة (LONG & SHORT) إذا لم نتجاوز حد الأمان
     if len(updated_trades) < 3: # السماح بفتح حتى 3 صفقات كحد أقصى بالتوازي
         for symbol, coinbase_id in COINBASE_PRODUCTS.items():
             if symbol in open_symbols:
@@ -207,7 +207,7 @@ def manage_and_scan_market():
             avg_volume = df['volume'].tail(10).mean()
             curr_volume = df.iloc[-1]['volume']
 
-            # شروط قنص صفقة صعودية (LONG): RSI منخفض ومقاومة للفوليوم
+            # أ. شروط قنص صفقة صعودية (LONG): RSI منخفض ومقاومة للفوليوم
             if curr_rsi < 35 and curr_volume > (avg_volume * 1.1):
                 entry = curr_price
                 sl = entry - (curr_atr * 1.5)
@@ -216,10 +216,10 @@ def manage_and_scan_market():
                 qty = risk_amount / (entry - sl) if (entry - sl) > 0 else 1.0
                 margin = (entry * qty) / LEVERAGE
 
-                if margin <= (current_balance * MAX_TOTAL_MARGIN_RATIO):
+                if margin <= (current_balance * MAX_TOTAL_MARGIN_RATIO) and tp1 > entry:
                     new_trade = {
                         'Symbol': symbol, 'Side': 'LONG', 'Entry': entry,
-                        'TP1': tp1, 'TP2': tp1 * 1.02, 'SL': sl, 'Qty': qty
+                        'TP1': tp1, 'SL': sl, 'Qty': qty
                     }
                     updated_trades.append(new_trade)
                     open_symbols.append(symbol)
@@ -232,7 +232,34 @@ def manage_and_scan_market():
                         f"📊 RSI: `{curr_rsi:.1f}` | Qty: `{qty:.4f}`"
                     )
                     send_telegram_message(msg)
-                    break # فتح صفقة واحدة في كل دورة تشغيل كحد أقصى
+                    break
+
+            # ب. شروط قنص صفقة هبوطية (SHORT): RSI مرتفع (تشبع شرائي > 65) ومقاومة للفوليوم
+            elif curr_rsi > 65 and curr_volume > (avg_volume * 1.1):
+                entry = curr_price
+                sl = entry + (curr_atr * 1.5)
+                tp1 = entry - (curr_atr * 2.0)
+                risk_amount = current_balance * RISK_PERCENTAGE
+                qty = risk_amount / (sl - entry) if (sl - entry) > 0 else 1.0
+                margin = (entry * qty) / LEVERAGE
+
+                if margin <= (current_balance * MAX_TOTAL_MARGIN_RATIO) and entry > tp1:
+                    new_trade = {
+                        'Symbol': symbol, 'Side': 'SHORT', 'Entry': entry,
+                        'TP1': tp1, 'SL': sl, 'Qty': qty
+                    }
+                    updated_trades.append(new_trade)
+                    open_symbols.append(symbol)
+                    
+                    msg = (
+                        f"📉 *Balanced Bot: New SHORT Signal!*\n"
+                        f"🔹 Symbol: `{symbol}`\n"
+                        f"💰 Entry: `{entry:.4f}`\n"
+                        f"🎯 TP1: `{tp1:.4f}` | 🛑 SL: `{sl:.4f}`\n"
+                        f"📊 RSI: `{curr_rsi:.1f}` | Qty: `{qty:.4f}`"
+                    )
+                    send_telegram_message(msg)
+                    break
 
     # حفظ الصفقات النشطة الجديدة والملفات
     if updated_trades:
