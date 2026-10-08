@@ -94,19 +94,61 @@ def manage_strict_paper_trades(current_prices):
         tp1 = row['TP1']
         sl = row['SL']
         qty = row['Qty']
-        side = row.get('Side', 'LONG')  # لتحديد ما إذا كانت الصفقة شراء أم بيع
+        side = row.get('Side', 'LONG')
         
         closed = False
         if symbol in current_prices:
             curr_price = current_prices[symbol]
             
             if side == "LONG":
-                # تفعيل الترايلنج ستوب (Trailing Stop) عند منتصف المسافة للـ LONG
                 if curr_price >= (entry_price + (tp1 - entry_price) * 0.5) and sl < entry_price:
                     send_telegram_message(f"🔄 *Strict Trailing Stop Activated! (LONG {symbol})*\nStop Loss moved to Entry Price.")
-                
-                # التحقق من الوصول للهدف (TP)
+
                 if curr_price >= tp1:
                     profit = (tp1 - entry_price) * qty
                     current_balance += profit
-                    send_telegram_message(f"🎯 *Strict TP Reached!
+                    send_telegram_message(f"🎯 *Strict TP Reached! (LONG {symbol})*\nProfit: `+${profit:.2f}`\nBalance: `${current_balance:.2f}`")
+                    closed = True
+                elif curr_price <= sl:
+                    loss = (entry_price - sl) * qty
+                    current_balance -= loss
+                    send_telegram_message(f"🛑 *Strict Stop Loss Hit! (LONG {symbol})*\nLoss: `-${loss:.2f}`\nBalance: `${current_balance:.2f}`")
+                    closed = True
+                    
+            elif side == "SHORT":
+                if curr_price <= (entry_price - (entry_price - tp1) * 0.5) and sl > entry_price:
+                    send_telegram_message(f"🔄 *Strict Trailing Stop Activated! (SHORT {symbol})*\nStop Loss moved to Entry Price.")
+
+                if curr_price <= tp1:
+                    profit = (entry_price - tp1) * qty
+                    current_balance += profit
+                    send_telegram_message(f"🎯 *Strict TP Reached! (SHORT {symbol})*\nProfit: `+${profit:.2f}`\nBalance: `${current_balance:.2f}`")
+                    closed = True
+                elif curr_price >= sl:
+                    loss = (sl - entry_price) * qty
+                    current_balance -= loss
+                    send_telegram_message(f"🛑 *Strict Stop Loss Hit! (SHORT {symbol})*\nLoss: `-${loss:.2f}`\nBalance: `${current_balance:.2f}`")
+                    closed = True
+
+        if not closed:
+            updated_trades.append(row.to_dict())
+
+    if updated_trades:
+        pd.DataFrame(updated_trades).to_csv(TRADE_FILE, index=False)
+    else:
+        if os.path.exists(TRADE_FILE):
+            os.remove(TRADE_FILE)
+
+    return current_balance
+
+if __name__ == "__main__":
+    check_heartbeat()
+    current_prices = {}
+    for sym, coinbase_id in COINBASE_PRODUCTS.items():
+        df = get_coinbase_candles(coinbase_id, granularity=3600, limit=5)
+        if df is not None and not df.empty:
+            current_prices[sym] = df.iloc[-1]['close']
+    
+    bal = manage_strict_paper_trades(current_prices)
+    with open(BALANCE_FILE, "w") as f:
+        f.write(str(bal))
