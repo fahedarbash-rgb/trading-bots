@@ -79,14 +79,14 @@ def check_daily_report(active_trades_count, current_balance):
 
         roi_percent = ((current_balance - INITIAL_BALANCE) / INITIAL_BALANCE) * 100
         report_msg = (
-            f"📊 *Flexible Bot: التقرير اليومي الشامل الاحترافي*\n"
+            f"📊 *Flexible Fast Bot: التقرير اليومي الشامل الاحترافي*\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
             f"⏰ الوقت: `{now.strftime('%Y-%m-%d %H:%M:%S')} UTC`\n"
             f"💰 الرصيد الحالي: `${current_balance:.2f}` (ROI: `{roi_percent:+.2f}%`)\n"
             f"📈 إجمالي الأرباح/الخسائر: `${total_pnl:+.2f}`\n"
             f"🎯 صفقات رابحة: `{wins}` | 🛑 صفقات خاسرة: `{losses}`\n"
             f"📂 الصفقات النشطة حالياً: `{active_trades_count} صفقات`\n"
-            f"🟢 *الحالة:* النظام المرن يعمل بكفاءة مع الوقف المتحرك وحماية رأس المال."
+            f"🚀 *الحالة:* البوت المرن السريع يقتنص الفرص على فريم الـ 15 دقيقة بكفاءة."
         )
         send_telegram_message(report_msg)
         try:
@@ -103,7 +103,7 @@ def save_closed_trade(trade_data):
     except Exception as e:
         logging.error(f"Error saving closed trade: {e}")
 
-def get_coinbase_candles(product_id, granularity=3600, limit=100):
+def get_coinbase_candles(product_id, granularity=900, limit=100): # تم التعديل إلى 900 ثانية (15 دقيقة) للسرعة
     url = f"https://api.exchange.coinbase.com/products/{product_id}/candles?granularity={granularity}"
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
@@ -129,7 +129,7 @@ def get_coinbase_candles(product_id, granularity=3600, limit=100):
     except Exception as e:
         error_msg = f"Error fetching {product_id}: {e}"
         logging.error(error_msg)
-        send_telegram_message(f"🚨 *Emergency Alert (Flexible Bot):* فشل جلب بيانات الشموع للعملة `{product_id}` - الخطأ: {e}")
+        send_telegram_message(f"🚨 *Emergency Alert (Flexible Fast Bot):* فشل جلب الشموع للعملة `{product_id}` - الخطأ: {e}")
         return None
 
 def calculate_rsi(series, period=14):
@@ -175,7 +175,7 @@ def manage_and_scan_flexible_market():
 
     for trade in active_trades:
         symbol = trade['Symbol']
-        df = get_coinbase_candles(COINBASE_PRODUCTS.get(symbol, "BTC-USD"), granularity=3600, limit=5)
+        df = get_coinbase_candles(COINBASE_PRODUCTS.get(symbol, "BTC-USD"), granularity=900, limit=5)
         if df is None or df.empty:
             updated_trades.append(trade)
             continue
@@ -189,52 +189,50 @@ def manage_and_scan_flexible_market():
 
         closed = False
         if side == "LONG":
-            # Trailing Stop آلي: نقل SL لنقطة الدخول عند بلوغ 50% من الهدف
             if curr_price >= (entry + (tp1 - entry) * 0.5) and sl < entry:
                 trade['SL'] = entry
-                send_telegram_message(f"🔄 *Flexible Trailing Stop Activated! (LONG {symbol})*\nStop Loss moved to Entry Price.")
+                send_telegram_message(f"🔄 *Flexible Fast Trailing Stop Activated! (LONG {symbol})*\nStop Loss moved to Entry Price.")
 
             if curr_price >= tp1:
                 profit = (tp1 - entry) * qty
                 current_balance += profit
-                send_telegram_message(f"🎯 *Flexible Mean-Reversion TP Reached! (LONG {symbol})*\nProfit: `+${profit:.2f}`\nBalance: `${current_balance:.2f}`")
+                send_telegram_message(f"🎯 *Flexible Fast TP Reached! (LONG {symbol})*\nProfit: `+${profit:.2f}`\nBalance: `${current_balance:.2f}`")
                 save_closed_trade({'Timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), 'Symbol': symbol, 'Side': side, 'Entry': entry, 'Exit': tp1, 'Result': 'WIN', 'PnL': round(profit, 2)})
                 closed = True
             elif curr_price <= sl:
                 loss = (entry - sl) * qty
                 current_balance -= loss
-                send_telegram_message(f"🛑 *Flexible Stop Loss Hit! (LONG {symbol})*\nLoss: `-${loss:.2f}`\nBalance: `${current_balance:.2f}`")
+                send_telegram_message(f"🛑 *Flexible Fast Stop Loss Hit! (LONG {symbol})*\nLoss: `-${loss:.2f}`\nBalance: `${current_balance:.2f}`")
                 save_closed_trade({'Timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), 'Symbol': symbol, 'Side': side, 'Entry': entry, 'Exit': sl, 'Result': 'LOSS', 'PnL': round(-loss, 2)})
                 closed = True
         elif side == "SHORT":
-            # Trailing Stop آلي لصفقات البيع
             if curr_price <= (entry - (entry - tp1) * 0.5) and sl > entry:
                 trade['SL'] = entry
-                send_telegram_message(f"🔄 *Flexible Trailing Stop Activated! (SHORT {symbol})*\nStop Loss moved to Entry Price.")
+                send_telegram_message(f"🔄 *Flexible Fast Trailing Stop Activated! (SHORT {symbol})*\nStop Loss moved to Entry Price.")
 
             if curr_price <= tp1:
                 profit = (entry - tp1) * qty
                 current_balance += profit
-                send_telegram_message(f"🎯 *Flexible Mean-Reversion TP Reached! (SHORT {symbol})*\nProfit: `+${profit:.2f}`\nBalance: `${current_balance:.2f}`")
+                send_telegram_message(f"🎯 *Flexible Fast TP Reached! (SHORT {symbol})*\nProfit: `+${profit:.2f}`\nBalance: `${current_balance:.2f}`")
                 save_closed_trade({'Timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), 'Symbol': symbol, 'Side': side, 'Entry': entry, 'Exit': tp1, 'Result': 'WIN', 'PnL': round(profit, 2)})
                 closed = True
             elif curr_price >= sl:
                 loss = (sl - entry) * qty
                 current_balance -= loss
-                send_telegram_message(f"🛑 *Flexible Stop Loss Hit! (SHORT {symbol})*\nLoss: `-${loss:.2f}`\nBalance: `${current_balance:.2f}`")
+                send_telegram_message(f"🛑 *Flexible Fast Stop Loss Hit! (SHORT {symbol})*\nLoss: `-${loss:.2f}`\nBalance: `${current_balance:.2f}`")
                 save_closed_trade({'Timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), 'Symbol': symbol, 'Side': side, 'Entry': entry, 'Exit': sl, 'Result': 'LOSS', 'PnL': round(-loss, 2)})
                 closed = True
 
         if not closed:
             updated_trades.append(trade)
 
-    # 2. فحص السوق لاقتناص صفقات الارتداد (Mean Reversion) الجديدة (LONG & SHORT)
-    if len(updated_trades) < 3:
+    # 2. فحص السوق السريع (فريم 15 دقيقة مع شروط RSI مرنة: أقل من 40 للشراء، وأعلى من 60 للبيع)
+    if len(updated_trades) < 4: # رفع السماحية حتى 4 صفقات لاقتناص فرص أكثر
         for symbol, coinbase_id in COINBASE_PRODUCTS.items():
             if symbol in open_symbols:
                 continue
                 
-            df = get_coinbase_candles(coinbase_id, granularity=3600, limit=50)
+            df = get_coinbase_candles(coinbase_id, granularity=900, limit=50)
             if df is None or len(df) < 30:
                 continue
                 
@@ -249,8 +247,8 @@ def manage_and_scan_flexible_market():
             mid_b = df.iloc[-1]['mid_band']
             curr_atr = df.iloc[-1]['atr']
 
-            # أ. شروط صفقات الشراء (LONG)
-            if curr_price <= lower_b and curr_rsi < 35:
+            # أ. شروط صفقات الشراء السريعة (LONG) - مرونة RSI < 40 واقتراب من الحد السفلي
+            if curr_price <= (lower_b * 1.005) and curr_rsi < 40:
                 entry = curr_price
                 sl = entry - (curr_atr * 1.5)
                 tp1 = mid_b
@@ -267,15 +265,15 @@ def manage_and_scan_flexible_market():
                     open_symbols.append(symbol)
                     
                     msg = (
-                        f"🚀 *Flexible Bot: New LONG Signal (Mean Reversion)*\n"
+                        f"🚀 *Flexible Fast Bot: New LONG Signal*\n"
                         f"🔹 Symbol: `{symbol}` | Entry: `{entry:.4f}`\n"
-                        f"🎯 TP: `{tp1:.4f}` | 🛑 SL: `{sl:.4f}` | RSI: `{curr_rsi:.1f}`"
+                        f"🎯 TP (Mid): `{tp1:.4f}` | 🛑 SL: `{sl:.4f}` | RSI: `{curr_rsi:.1f}`"
                     )
                     send_telegram_message(msg)
                     break
 
-            # ب. شروط صفقات البيع (SHORT)
-            elif curr_price >= upper_b and curr_rsi > 65:
+            # ب. شروط صفقات البيع السريعة (SHORT) - مرونة RSI > 60 واقتراب من الحد العلوي
+            elif curr_price >= (upper_b * 0.995) and curr_rsi > 60:
                 entry = curr_price
                 sl = entry + (curr_atr * 1.5)
                 tp1 = mid_b
@@ -292,9 +290,9 @@ def manage_and_scan_flexible_market():
                     open_symbols.append(symbol)
                     
                     msg = (
-                        f"📉 *Flexible Bot: New SHORT Signal (Mean Reversion)*\n"
+                        f"📉 *Flexible Fast Bot: New SHORT Signal*\n"
                         f"🔹 Symbol: `{symbol}` | Entry: `{entry:.4f}`\n"
-                        f"🎯 TP: `{tp1:.4f}` | 🛑 SL: `{sl:.4f}` | RSI: `{curr_rsi:.1f}`"
+                        f"🎯 TP (Mid): `{tp1:.4f}` | 🛑 SL: `{sl:.4f}` | RSI: `{curr_rsi:.1f}`"
                     )
                     send_telegram_message(msg)
                     break
