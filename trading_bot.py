@@ -5,12 +5,17 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 
+# --- إعداد نظام تسجيل الأخطاء (Error Logging) ---
 logging.basicConfig(filename='bot_errors.log', level=logging.ERROR, format='%(asctime)s - %(levelname)s - %(message)s')
 
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', "8935193100:AAGGIvDsapewUqGO-Z0Faas46D0VNgGkQKo")
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', "5620413191")
 
-INITIAL_BALANCE = 200.0    
+INITIAL_BALANCE = 200.0     
+RISK_PERCENTAGE = 0.02     
+LEVERAGE = 3     
+MAX_TOTAL_MARGIN_RATIO = 0.6  
+
 TRADE_FILE = "active_strict_trades.csv"
 BALANCE_FILE = "strict_balance.txt"
 CLOSED_FILE = "closed_strict_trades_history.csv"
@@ -45,12 +50,20 @@ def check_heartbeat():
         send_hb = True
 
     if send_hb:
-        send_telegram_message("💓 *Strict Bot Heartbeat:* البوت الصارم ثنائي الاتجاه (Long & Short) يعمل بشكل سليم ومستقر ومتصل بنجاح.")
+        send_telegram_message("💓 *Strict Bot Heartbeat:* البوت الصارم المحدث ثنائي الاتجاه يعمل بكفاءة ويراقب الأسواق لاقتناص الصفقات وإدارتها.")
         try:
             with open(HEARTBEAT_FILE, "w") as f:
                 f.write(now.isoformat())
         except Exception as e:
             logging.error(f"Error writing heartbeat file: {e}")
+
+def save_closed_trade(trade_data):
+    file_exists = os.path.exists(CLOSED_FILE)
+    df = pd.DataFrame([trade_data])
+    try:
+        df.to_csv(CLOSED_FILE, mode='a', header=not file_exists, index=False)
+    except Exception as e:
+        logging.error(f"Error saving closed trade: {e}")
 
 def get_coinbase_candles(product_id, granularity=3600, limit=100):
     url = f"https://api.exchange.coinbase.com/products/{product_id}/candles?granularity={granularity}"
@@ -66,7 +79,21 @@ def get_coinbase_candles(product_id, granularity=3600, limit=100):
         logging.error(f"Error fetching {product_id}: {e}")
         return None
 
-def manage_strict_paper_trades(current_prices):
+def calculate_rsi(series, period=14):
+    delta = series.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    rs = gain / loss
+    return 100 - (100 / (1 + rs))
+
+def calculate_atr(df, period=14):
+    high_low = df['high'] - df['low']
+    high_close = np.abs(df['high'] - df['close'].shift())
+    low_close = np.abs(df['low'] - df['close'].shift())
+    tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+    return tr.rolling(window=period).mean()
+
+def manage_and_scan_strict_market():
     current_balance = INITIAL_BALANCE
     if os.path.exists(BALANCE_FILE):
         try:
@@ -75,80 +102,123 @@ def manage_strict_paper_trades(current_prices):
         except Exception:
             pass
 
-    if not os.path.exists(TRADE_FILE):
-        return current_balance
-
-    try:
-        trades_df = pd.read_csv(TRADE_FILE)
-    except Exception:
-        return current_balance
-
-    if trades_df.empty:
-        return current_balance
+    active_trades = []
+    if os.path.exists(TRADE_FILE):
+        try:
+            active_trades = pd.read_csv(TRADE_FILE).to_dict('records')
+        except Exception:
+            pass
 
     updated_trades = []
-    
-    for _, row in trades_df.iterrows():
-        symbol = row['Symbol']
-        entry_price = row['Entry']
-        tp1 = row['TP1']
-        sl = row['SL']
-        qty = row['Qty']
-        side = row.get('Side', 'LONG')
-        
+    open_symbols = [t['Symbol'] for t in active_trades]
+
+    # 1. إدارة الصفقات المفتوحة ومتابعة الـ Trailing Stop والأهداف
+    for trade in active_trades:
+        symbol = trade['Symbol']
+        df = get_coinbase_candles(COINBASE_PRODUCTS.get(symbol, "BTC-USD"), granularity=3600, limit=5)
+        if df is None or df.empty:
+            updated_trades.append(trade)
+            continue
+
+        curr_price = df.iloc[-1]['close']
+        entry_price = trade['Entry']
+        tp1 = trade['TP1']
+        sl = trade['SL']
+        qty = trade['Qty']
+        side = trade.get('Side', 'LONG')
+
         closed = False
-        if symbol in current_prices:
-            curr_price = current_prices[symbol]
-            
-            if side == "LONG":
-                if curr_price >= (entry_price + (tp1 - entry_price) * 0.5) and sl < entry_price:
-                    send_telegram_message(f"🔄 *Strict Trailing Stop Activated! (LONG {symbol})*\nStop Loss moved to Entry Price.")
+        if side == "LONG":
+            if curr_price >= (entry_price + (tp1 - entry_price) * 0.5) and sl < entry_price:
+                trade['SL'] = entry_price  # رفع وقف الخسارة لنقطة الدخول
+                send_telegram_message(f"🔄 *Strict Trailing Stop Activated! (LONG {symbol})*\nStop Loss moved to Entry Price.")
 
-                if curr_price >= tp1:
-                    profit = (tp1 - entry_price) * qty
-                    current_balance += profit
-                    send_telegram_message(f"🎯 *Strict TP Reached! (LONG {symbol})*\nProfit: `+${profit:.2f}`\nBalance: `${current_balance:.2f}`")
-                    closed = True
-                elif curr_price <= sl:
-                    loss = (entry_price - sl) * qty
-                    current_balance -= loss
-                    send_telegram_message(f"🛑 *Strict Stop Loss Hit! (LONG {symbol})*\nLoss: `-${loss:.2f}`\nBalance: `${current_balance:.2f}`")
-                    closed = True
-                    
-            elif side == "SHORT":
-                if curr_price <= (entry_price - (entry_price - tp1) * 0.5) and sl > entry_price:
-                    send_telegram_message(f"🔄 *Strict Trailing Stop Activated! (SHORT {symbol})*\nStop Loss moved to Entry Price.")
+            if curr_price >= tp1:
+                profit = (tp1 - entry_price) * qty
+                current_balance += profit
+                send_telegram_message(f"🎯 *Strict TP Reached! (LONG {symbol})*\nProfit: `+${profit:.2f}`\nBalance: `${current_balance:.2f}`")
+                save_closed_trade({'Timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), 'Symbol': symbol, 'Side': side, 'Entry': entry_price, 'Exit': tp1, 'Result': 'WIN', 'PnL': round(profit, 2)})
+                closed = True
+            elif curr_price <= sl:
+                loss = (entry_price - sl) * qty
+                current_balance -= loss
+                send_telegram_message(f"🛑 *Strict Stop Loss Hit! (LONG {symbol})*\nLoss: `-${loss:.2f}`\nBalance: `${current_balance:.2f}`")
+                save_closed_trade({'Timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), 'Symbol': symbol, 'Side': side, 'Entry': entry_price, 'Exit': sl, 'Result': 'LOSS', 'PnL': round(-loss, 2)})
+                closed = True
 
-                if curr_price <= tp1:
-                    profit = (entry_price - tp1) * qty
-                    current_balance += profit
-                    send_telegram_message(f"🎯 *Strict TP Reached! (SHORT {symbol})*\nProfit: `+${profit:.2f}`\nBalance: `${current_balance:.2f}`")
-                    closed = True
-                elif curr_price >= sl:
-                    loss = (sl - entry_price) * qty
-                    current_balance -= loss
-                    send_telegram_message(f"🛑 *Strict Stop Loss Hit! (SHORT {symbol})*\nLoss: `-${loss:.2f}`\nBalance: `${current_balance:.2f}`")
-                    closed = True
+        elif side == "SHORT":
+            if curr_price <= (entry_price - (entry_price - tp1) * 0.5) and sl > entry_price:
+                trade['SL'] = entry_price  # خفض وقف الخسارة لنقطة الدخول
+                send_telegram_message(f"🔄 *Strict Trailing Stop Activated! (SHORT {symbol})*\nStop Loss moved to Entry Price.")
+
+            if curr_price <= tp1:
+                profit = (entry_price - tp1) * qty
+                current_balance += profit
+                send_telegram_message(f"🎯 *Strict TP Reached! (SHORT {symbol})*\nProfit: `+${profit:.2f}`\nBalance: `${current_balance:.2f}`")
+                save_closed_trade({'Timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), 'Symbol': symbol, 'Side': side, 'Entry': entry_price, 'Exit': tp1, 'Result': 'WIN', 'PnL': round(profit, 2)})
+                closed = True
+            elif curr_price >= sl:
+                loss = (sl - entry_price) * qty
+                current_balance -= loss
+                send_telegram_message(f"🛑 *Strict Stop Loss Hit! (SHORT {symbol})*\nLoss: `-${loss:.2f}`\nBalance: `${current_balance:.2f}`")
+                save_closed_trade({'Timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), 'Symbol': symbol, 'Side': side, 'Entry': entry_price, 'Exit': sl, 'Result': 'LOSS', 'PnL': round(-loss, 2)})
+                closed = True
 
         if not closed:
-            updated_trades.append(row.to_dict())
+            updated_trades.append(trade)
 
-    if updated_trades:
-        pd.DataFrame(updated_trades).to_csv(TRADE_FILE, index=False)
-    else:
-        if os.path.exists(TRADE_FILE):
-            os.remove(TRADE_FILE)
+    # 2. فحص السوق واقتناص صفقات جديدة (LONG & SHORT) بشروط صارمة ومدروسة
+    if len(updated_trades) < 3:
+        for symbol, coinbase_id in COINBASE_PRODUCTS.items():
+            if symbol in open_symbols:
+                continue
 
-    return current_balance
+            df = get_coinbase_candles(coinbase_id, granularity=3600, limit=50)
+            if df is None or len(df) < 30:
+                continue
 
-if __name__ == "__main__":
-    check_heartbeat()
-    current_prices = {}
-    for sym, coinbase_id in COINBASE_PRODUCTS.items():
-        df = get_coinbase_candles(coinbase_id, granularity=3600, limit=5)
-        if df is not None and not df.empty:
-            current_prices[sym] = df.iloc[-1]['close']
-    
-    bal = manage_strict_paper_trades(current_prices)
-    with open(BALANCE_FILE, "w") as f:
-        f.write(str(bal))
+            df['rsi'] = calculate_rsi(df['close'], 14)
+            df['ema50'] = df['close'].ewm(span=50, adjust=False).mean()
+            df['atr'] = calculate_atr(df, 14)
+
+            curr_price = df.iloc[-1]['close']
+            curr_rsi = df.iloc[-1]['rsi']
+            ema50 = df.iloc[-1]['ema50']
+            curr_atr = df.iloc[-1]['atr']
+
+            # شروط الشراء (LONG): اتجاه صاعد فوق EMA50 مع تشبع بيعي RSI واعد
+            if curr_price > ema50 and curr_rsi < 38:
+                entry = curr_price
+                sl = entry - (curr_atr * 1.5)
+                tp1 = entry + (curr_atr * 2.5)
+                risk_amount = current_balance * RISK_PERCENTAGE
+                qty = risk_amount / (entry - sl) if (entry - sl) > 0 else 1.0
+                margin = (entry * qty) / LEVERAGE
+
+                if margin <= (current_balance * MAX_TOTAL_MARGIN_RATIO) and tp1 > entry:
+                    new_trade = {
+                        'Symbol': symbol, 'Side': 'LONG', 'Entry': entry,
+                        'TP1': tp1, 'SL': sl, 'Qty': qty
+                    }
+                    updated_trades.append(new_trade)
+                    open_symbols.append(symbol)
+                    send_telegram_message(f"🛡️ *Strict Bot: New LONG Signal*\n🔹 Symbol: `{symbol}` | Entry: `{entry:.4f}`\n🎯 TP: `{tp1:.4f}` | 🛑 SL: `{sl:.4f}`\n📊 RSI: `{curr_rsi:.1f}`")
+                    break
+
+            # شروط البيع (SHORT): اتجاه هابط تحت EMA50 مع تشبع شرائي RSI واعد
+            elif curr_price < ema50 and curr_rsi > 62:
+                entry = curr_price
+                sl = entry + (curr_atr * 1.5)
+                tp1 = entry - (curr_atr * 2.5)
+                risk_amount = current_balance * RISK_PERCENTAGE
+                qty = risk_amount / (sl - entry) if (sl - entry) > 0 else 1.0
+                margin = (entry * qty) / LEVERAGE
+
+                if margin <= (current_balance * MAX_TOTAL_MARGIN_RATIO) and entry > tp1:
+                    new_trade = {
+                        'Symbol': symbol, 'Side': 'SHORT', 'Entry': entry,
+                        'TP1': tp1, 'SL': sl, 'Qty': qty
+                    }
+                    updated_trades.append(new_trade)
+                    open_symbols.append(symbol)
+                    send_telegram_message(f"🛡️ *Strict Bot: New SHORT Signal*\n🔹 Symbol: `{symbol}` | Entry: `{entry:.4f}`\n🎯 TP: `{tp1:.4f}
