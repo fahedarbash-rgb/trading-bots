@@ -17,16 +17,16 @@ TELEGRAM_BOT_TOKEN = "8772493944:AAGb4Y1VuBLrCq0vfvnhue7oRW4hjf_LYJE"
 TELEGRAM_CHAT_ID = "5620413191"
 
 # --- إعدادات رأس المال وإدارة المخاطر ---
-INITIAL_BALANCE = 200.0       
+INITIAL_BALANCE = 200.0        
 RISK_PERCENTAGE = 0.02        
-LEVERAGE = 3                  
+LEVERAGE = 3                 
 MAX_TOTAL_MARGIN_RATIO = 0.6  # أقصى نسبة مسموح بها من الرصيد كإجمالي هوامش مفتوحة (60%)
 
 # --- ملفات السجلات والأرشيف ---
 TRADE_FILE = "active_balanced_trades.csv"
 BALANCE_FILE = "balanced_balance.txt"
 CLOSED_FILE = "closed_trades_history.csv"
-HEARTBEAT_FILE = "last_heartbeat.txt"
+HEARTBEAT_FILE = "last_balanced_heartbeat.txt"
 
 # --- سلة العملات المعتمدة ---
 COINBASE_PRODUCTS = {
@@ -49,22 +49,31 @@ def send_telegram_message(message):
         print(error_msg)
         logging.error(error_msg)
 
-def check_heartbeat():
+def check_daily_report(active_trades_count, current_balance):
     now = datetime.utcnow()
-    send_hb = False
+    send_report = False
     if os.path.exists(HEARTBEAT_FILE):
         try:
             with open(HEARTBEAT_FILE, "r") as f:
                 last_time = datetime.fromisoformat(f.read().strip())
                 if (now - last_time) >= timedelta(hours=24):
-                    send_hb = True
+                    send_report = True
         except Exception:
-            send_hb = True
+            send_report = True
     else:
-        send_hb = True
+        send_report = True
 
-    if send_hb:
-        send_telegram_message("💓 *Balanced Bot Heartbeat:* البوت المتوازن ثنائي الاتجاه (Long & Short) يعمل بكفاءة عالية وجاهز لاقتناص الصفقات.")
+    if send_report:
+        report_msg = (
+            f"📊 *Balanced Bot: التقرير اليومي الشامل*\n"
+            f"━━━━━━━━━━━━━━━━━━━\n"
+            f"⏰ الوقت: `{now.strftime('%Y-%m-%d %H:%M:%S')} UTC`\n"
+            f"💰 الرصيد الحالي: `${current_balance:.2f}`\n"
+            f"🔍 العملات المراقبَة: `{len(COINBASE_PRODUCTS)} عملات`\n"
+            f"📂 الصفقات النشطة حالياً: `{active_trades_count} صفقات`\n"
+            f"🟢 *الحالة:* البوت المتوازن يعمل بانتظام، يفحص الأسواق، وينتظر الفرص."
+        )
+        send_telegram_message(report_msg)
         try:
             with open(HEARTBEAT_FILE, "w") as f:
                 f.write(now.isoformat())
@@ -123,7 +132,6 @@ def calculate_atr(df, period=14):
     return tr.rolling(window=period).mean()
 
 def manage_and_scan_market():
-    # قراءة الرصيد الحالي
     current_balance = INITIAL_BALANCE
     if os.path.exists(BALANCE_FILE):
         try:
@@ -188,8 +196,8 @@ def manage_and_scan_market():
         if not closed:
             updated_trades.append(trade)
 
-    # 2. فحص السوق لاقتناص صفقات جديدة (LONG & SHORT) إذا لم نتجاوز حد الأمان
-    if len(updated_trades) < 3: # السماح بفتح حتى 3 صفقات كحد أقصى بالتوازي
+    # 2. فحص السوق لاقتناص صفقات جديدة (LONG & SHORT)
+    if len(updated_trades) < 3:
         for symbol, coinbase_id in COINBASE_PRODUCTS.items():
             if symbol in open_symbols:
                 continue
@@ -207,7 +215,7 @@ def manage_and_scan_market():
             avg_volume = df['volume'].tail(10).mean()
             curr_volume = df.iloc[-1]['volume']
 
-            # أ. شروط قنص صفقة صعودية (LONG): RSI منخفض ومقاومة للفوليوم
+            # أ. شروط صفقات الشراء (LONG)
             if curr_rsi < 35 and curr_volume > (avg_volume * 1.1):
                 entry = curr_price
                 sl = entry - (curr_atr * 1.5)
@@ -234,7 +242,7 @@ def manage_and_scan_market():
                     send_telegram_message(msg)
                     break
 
-            # ب. شروط قنص صفقة هبوطية (SHORT): RSI مرتفع (تشبع شرائي > 65) ومقاومة للفوليوم
+            # ب. شروط صفقات البيع (SHORT)
             elif curr_rsi > 65 and curr_volume > (avg_volume * 1.1):
                 entry = curr_price
                 sl = entry + (curr_atr * 1.5)
@@ -261,7 +269,7 @@ def manage_and_scan_market():
                     send_telegram_message(msg)
                     break
 
-    # حفظ الصفقات النشطة الجديدة والملفات
+    # حفظ الصفقات والملفات
     if updated_trades:
         pd.DataFrame(updated_trades).to_csv(TRADE_FILE, index=False)
     else:
@@ -271,6 +279,8 @@ def manage_and_scan_market():
     with open(BALANCE_FILE, "w") as f:
         f.write(str(current_balance))
 
+    # فحص إرسال التقرير اليومي الشامل
+    check_daily_report(len(updated_trades), current_balance)
+
 if __name__ == "__main__":
-    check_heartbeat()
     manage_and_scan_market()
