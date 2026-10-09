@@ -49,22 +49,31 @@ def send_telegram_message(message):
         print(error_msg)
         logging.error(error_msg)
 
-def check_heartbeat():
+def check_daily_report(active_trades_count, current_balance):
     now = datetime.utcnow()
-    send_hb = False
+    send_report = False
     if os.path.exists(HEARTBEAT_FILE):
         try:
             with open(HEARTBEAT_FILE, "r") as f:
                 last_time = datetime.fromisoformat(f.read().strip())
                 if (now - last_time) >= timedelta(hours=24):
-                    send_hb = True
+                    send_report = True
         except Exception:
-            send_hb = True
+            send_report = True
     else:
-        send_hb = True
+        send_report = True
 
-    if send_hb:
-        send_telegram_message("💓 *Global S&R Scanner Bot Heartbeat:* البوت المرن والمحدث ثنائي الاتجاه يعمل بكفاءة عالية ويراقب الأسواق.")
+    if send_report:
+        report_msg = (
+            f"📊 *Global S&R Bot: التقرير اليومي الشامل*\n"
+            f"━━━━━━━━━━━━━━━━━━━\n"
+            f"⏰ الوقت: `{now.strftime('%Y-%m-%d %H:%M:%S')} UTC`\n"
+            f"💰 الرصيد الحالي: `${current_balance:.2f}`\n"
+            f"🔍 العملات المراقبَة: `{len(GLOBAL_PRODUCTS)} عملات`\n"
+            f"📂 الصفقات النشطة حالياً: `{active_trades_count} صفقات`\n"
+            f"🟢 *الحالة:* البوت يعمل بانتظام، يفحص الأسواق، وينتظر توافر الشروط المرنة بدقة."
+        )
+        send_telegram_message(report_msg)
         try:
             with open(HEARTBEAT_FILE, "w") as f:
                 f.write(now.isoformat())
@@ -235,3 +244,59 @@ def manage_and_scan_sr_market():
                         'TP1': tp1, 'SL': sl, 'Qty': qty
                     }
                     updated_trades.append(new_trade)
+                    open_symbols.append(symbol)
+
+                    send_telegram_message(
+                        f"🛡️ *Global S&R Bot (Flexible): Confirmed LONG*\n"
+                        f"🔹 Symbol: `{symbol}` | Entry: `{entry:.4f}`\n"
+                        f"📈 Trend (4H): `UP`\n"
+                        f"🟢 Support: `{support:.4f}` | Vol & 15m Confirmed\n"
+                        f"🎯 TP: `{tp1:.4f}` | 🛑 SL: `{sl:.4f}`\n"
+                        f"⚖️ Margin: `${margin:.2f}`"
+                    )
+                    break
+
+            # ب. شروط صفقات البيع SHORT (بناءً على اتجاه 4H الهابط + اقتراب مرن من المقاومة)
+            elif (trend_4h == "BEARISH" and 
+                  abs(curr_price - resistance) <= (curr_atr * 0.8) and curr_price <= resistance and 
+                  is_volume_confirmed and last_15m_close <= prev_15m_close):
+
+                entry = curr_price
+                sl = resistance + (curr_atr * 1.0)
+                tp1 = support
+                risk_amount = current_balance * RISK_PERCENTAGE
+                qty = risk_amount / (sl - entry) if (sl - entry) > 0 else 1.0
+                margin = (entry * qty) / LEVERAGE
+
+                if margin <= (current_balance * MAX_TOTAL_MARGIN_RATIO) and entry > tp1:
+                    new_trade = {
+                        'Symbol': symbol, 'Side': 'SHORT', 'Entry': entry,
+                        'TP1': tp1, 'SL': sl, 'Qty': qty
+                    }
+                    updated_trades.append(new_trade)
+                    open_symbols.append(symbol)
+
+                    send_telegram_message(
+                        f"🛡️ *Global S&R Bot (Flexible): Confirmed SHORT*\n"
+                        f"🔹 Symbol: `{symbol}` | Entry: `{entry:.4f}`\n"
+                        f"📉 Trend (4H): `DOWN`\n"
+                        f"🔴 Resistance: `{resistance:.4f}` | Vol & 15m Confirmed\n"
+                        f"🎯 TP: `{tp1:.4f}` | 🛑 SL: `{sl:.4f}`\n"
+                        f"⚖️ Margin: `${margin:.2f}`"
+                    )
+                    break
+
+    if updated_trades:
+        pd.DataFrame(updated_trades).to_csv(TRADE_FILE, index=False)
+    else:
+        if os.path.exists(TRADE_FILE):
+            os.remove(TRADE_FILE)
+
+    with open(BALANCE_FILE, "w") as f:
+        f.write(str(current_balance))
+
+    # فحص إرسال التقرير اليومي الشامل
+    check_daily_report(len(updated_trades), current_balance)
+
+if __name__ == "__main__":
+    manage_and_scan_sr_market()
