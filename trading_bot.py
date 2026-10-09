@@ -34,23 +34,51 @@ def send_telegram_message(message):
     try:
         requests.post(url, json=payload, timeout=10)
     except Exception as e:
-        logging.error(f"Telegram Error: {e}")
+        error_msg = f"Telegram Error: {e}"
+        logging.error(error_msg)
+        try:
+            requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": f"🚨 *Emergency Alert (Strict Bot):* فشل الاتصال بتيليجرام: {e}", "parse_mode": "Markdown"}, timeout=5)
+        except:
+            pass
 
-def check_heartbeat():
+def check_daily_report(active_trades_count, current_balance):
     now = datetime.utcnow()
-    send_hb = False
+    send_report = False
     if os.path.exists(HEARTBEAT_FILE):
         try:
             with open(HEARTBEAT_FILE, "r") as f:
-                if (now - datetime.fromisoformat(f.read().strip())) >= timedelta(hours=24):
-                    send_hb = True
+                last_time = datetime.fromisoformat(f.read().strip())
+                if (now - last_time) >= timedelta(hours=24):
+                    send_report = True
         except Exception:
-            send_hb = True
+            send_report = True
     else:
-        send_hb = True
+        send_report = True
 
-    if send_hb:
-        send_telegram_message("💓 *Strict Bot Heartbeat:* البوت الصارم المحدث ثنائي الاتجاه يعمل بكفاءة ويراقب الأسواق لاقتناص الصفقات وإدارتها.")
+    if send_report:
+        wins, losses, total_pnl = 0, 0, 0.0
+        if os.path.exists(CLOSED_FILE):
+            try:
+                df_closed = pd.read_csv(CLOSED_FILE)
+                if not df_closed.empty:
+                    wins = len(df_closed[df_closed['Result'] == 'WIN'])
+                    losses = len(df_closed[df_closed['Result'] == 'LOSS'])
+                    total_pnl = df_closed['PnL'].sum()
+            except Exception:
+                pass
+
+        roi_percent = ((current_balance - INITIAL_BALANCE) / INITIAL_BALANCE) * 100
+        report_msg = (
+            f"📊 *Strict Bot: التقرير اليومي الشامل الاحترافي*\n"
+            f"━━━━━━━━━━━━━━━━━━━\n"
+            f"⏰ الوقت: `{now.strftime('%Y-%m-%d %H:%M:%S')} UTC`\n"
+            f"💰 الرصيد الحالي: `${current_balance:.2f}` (ROI: `{roi_percent:+.2f}%`)\n"
+            f"📈 إجمالي الأرباح/الخسائر: `${total_pnl:+.2f}`\n"
+            f"🎯 صفقات رابحة: `{wins}` | 🛑 صفقات خاسرة: `{losses}`\n"
+            f"📂 الصفقات النشطة حالياً: `{active_trades_count} صفقات`\n"
+            f"🟢 *الحالة:* البوت الصارم يعمل بكفاءة تامة مع الوقف المتحرك والمخاطر المدروسة."
+        )
+        send_telegram_message(report_msg)
         try:
             with open(HEARTBEAT_FILE, "w") as f:
                 f.write(now.isoformat())
@@ -76,7 +104,9 @@ def get_coinbase_candles(product_id, granularity=3600, limit=100):
         df = pd.DataFrame(df_list)
         return df.tail(limit).reset_index(drop=True) if len(df) > limit else df
     except Exception as e:
-        logging.error(f"Error fetching {product_id}: {e}")
+        error_msg = f"Error fetching {product_id}: {e}"
+        logging.error(error_msg)
+        send_telegram_message(f"🚨 *Emergency Alert (Strict Bot):* فشل جلب الشموع للعملة `{product_id}` - الخطأ: {e}")
         return None
 
 def calculate_rsi(series, period=14):
@@ -112,7 +142,7 @@ def manage_and_scan_strict_market():
     updated_trades = []
     open_symbols = [t['Symbol'] for t in active_trades]
 
-    # 1. إدارة الصفقات المفتوحة ومتابعة الـ Trailing Stop والأهداف
+    # 1. إدارة الصفقات المفتوحة مع Trailing Stop آلي والأهداف
     for trade in active_trades:
         symbol = trade['Symbol']
         df = get_coinbase_candles(COINBASE_PRODUCTS.get(symbol, "BTC-USD"), granularity=3600, limit=5)
@@ -129,8 +159,9 @@ def manage_and_scan_strict_market():
 
         closed = False
         if side == "LONG":
+            # Trailing Stop آلي: نقل SL لنقطة الدخول عند بلوغ 50% من الهدف الأول
             if curr_price >= (entry_price + (tp1 - entry_price) * 0.5) and sl < entry_price:
-                trade['SL'] = entry_price  # رفع وقف الخسارة لنقطة الدخول
+                trade['SL'] = entry_price
                 send_telegram_message(f"🔄 *Strict Trailing Stop Activated! (LONG {symbol})*\nStop Loss moved to Entry Price.")
 
             if curr_price >= tp1:
@@ -147,8 +178,9 @@ def manage_and_scan_strict_market():
                 closed = True
 
         elif side == "SHORT":
+            # Trailing Stop آلي لصفقات البيع
             if curr_price <= (entry_price - (entry_price - tp1) * 0.5) and sl > entry_price:
-                trade['SL'] = entry_price  # خفض وقف الخسارة لنقطة الدخول
+                trade['SL'] = entry_price
                 send_telegram_message(f"🔄 *Strict Trailing Stop Activated! (SHORT {symbol})*\nStop Loss moved to Entry Price.")
 
             if curr_price <= tp1:
@@ -167,7 +199,7 @@ def manage_and_scan_strict_market():
         if not closed:
             updated_trades.append(trade)
 
-    # 2. فحص السوق واقتناص صفقات جديدة (LONG & SHORT) بشروط صارمة ومدروسة
+    # 2. فحص السوق واقتناص صفقات جديدة (LONG & SHORT) بشروط صارمة
     if len(updated_trades) < 3:
         for symbol, coinbase_id in COINBASE_PRODUCTS.items():
             if symbol in open_symbols:
@@ -186,7 +218,7 @@ def manage_and_scan_strict_market():
             ema50 = df.iloc[-1]['ema50']
             curr_atr = df.iloc[-1]['atr']
 
-            # شروط الشراء (LONG): اتجاه صاعد فوق EMA50 مع تشبع بيعي RSI واعد
+            # شروط الشراء (LONG)
             if curr_price > ema50 and curr_rsi < 38:
                 entry = curr_price
                 sl = entry - (curr_atr * 1.5)
@@ -202,10 +234,10 @@ def manage_and_scan_strict_market():
                     }
                     updated_trades.append(new_trade)
                     open_symbols.append(symbol)
-                    send_telegram_message(f"🛡️ *Strict Bot: New LONG Signal*\n🔹 Symbol: `{symbol}` | Entry: `{entry:.4f}`\n🎯 TP: `{tp1:.4f}` | 🛑 SL: `{sl:.4f}`\n📊 RSI: `{curr_rsi:.1f}`")
+                    send_telegram_message(f"🛡️ *Strict Bot: New LONG Signal*\n🔹 Symbol: `{symbol}` | Entry: `{entry:.4f}`\n🎯 TP: `{tp1:.4f}` | 🛑 SL: `{sl:.4f}` | RSI: `{curr_rsi:.1f}`")
                     break
 
-            # شروط البيع (SHORT): اتجاه هابط تحت EMA50 مع تشبع شرائي RSI واعد
+            # شروط البيع (SHORT)
             elif curr_price < ema50 and curr_rsi > 62:
                 entry = curr_price
                 sl = entry + (curr_atr * 1.5)
@@ -221,4 +253,19 @@ def manage_and_scan_strict_market():
                     }
                     updated_trades.append(new_trade)
                     open_symbols.append(symbol)
-                    send_telegram_message(f"🛡️ *Strict Bot: New SHORT Signal*\n🔹 Symbol: `{symbol}` | Entry: `{entry:.4f}`\n🎯 TP: `{tp1:.4f}
+                    send_telegram_message(f"🛡️ *Strict Bot: New SHORT Signal*\n🔹 Symbol: `{symbol}` | Entry: `{entry:.4f}`\n🎯 TP: `{tp1:.4f}` | 🛑 SL: `{sl:.4f}` | RSI: `{curr_rsi:.1f}`")
+                    break
+
+    if updated_trades:
+        pd.DataFrame(updated_trades).to_csv(TRADE_FILE, index=False)
+    else:
+        if os.path.exists(TRADE_FILE):
+            os.remove(TRADE_FILE)
+
+    with open(BALANCE_FILE, "w") as f:
+        f.write(str(current_balance))
+
+    check_daily_report(len(updated_trades), current_balance)
+
+if __name__ == "__main__":
+    manage_and_scan_strict_market()
