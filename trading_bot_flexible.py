@@ -42,29 +42,53 @@ def send_telegram_message(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "Markdown"}
     try:
-        response = requests.post(url, json=payload, timeout=10)
-        print(f"Telegram Response: {response.status_code}")
+        requests.post(url, json=payload, timeout=10)
     except Exception as e:
         error_msg = f"Telegram Error: {e}"
-        print(error_msg)
         logging.error(error_msg)
+        try:
+            requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": f"🚨 *Emergency Alert (Flexible Bot):* فشل الاتصال بتيليجرام: {e}", "parse_mode": "Markdown"}, timeout=5)
+        except:
+            pass
 
-def check_heartbeat():
+def check_daily_report(active_trades_count, current_balance):
     now = datetime.utcnow()
-    send_hb = False
+    send_report = False
     if os.path.exists(HEARTBEAT_FILE):
         try:
             with open(HEARTBEAT_FILE, "r") as f:
                 last_time = datetime.fromisoformat(f.read().strip())
                 if (now - last_time) >= timedelta(hours=24):
-                    send_hb = True
+                    send_report = True
         except Exception:
-            send_hb = True
+            send_report = True
     else:
-        send_hb = True
+        send_report = True
 
-    if send_hb:
-        send_telegram_message("💓 *Flexible Bot Heartbeat:* البوت المرن ثنائي الاتجاه (Long & Short) يعمل بكفاءة عالية وجاهز لاقتناص فرص الارتداد.")
+    if send_report:
+        wins, losses, total_pnl = 0, 0, 0.0
+        if os.path.exists(CLOSED_FILE):
+            try:
+                df_closed = pd.read_csv(CLOSED_FILE)
+                if not df_closed.empty:
+                    wins = len(df_closed[df_closed['Result'] == 'WIN'])
+                    losses = len(df_closed[df_closed['Result'] == 'LOSS'])
+                    total_pnl = df_closed['PnL'].sum()
+            except Exception:
+                pass
+
+        roi_percent = ((current_balance - INITIAL_BALANCE) / INITIAL_BALANCE) * 100
+        report_msg = (
+            f"📊 *Flexible Bot: التقرير اليومي الشامل الاحترافي*\n"
+            f"━━━━━━━━━━━━━━━━━━━\n"
+            f"⏰ الوقت: `{now.strftime('%Y-%m-%d %H:%M:%S')} UTC`\n"
+            f"💰 الرصيد الحالي: `${current_balance:.2f}` (ROI: `{roi_percent:+.2f}%`)\n"
+            f"📈 إجمالي الأرباح/الخسائر: `${total_pnl:+.2f}`\n"
+            f"🎯 صفقات رابحة: `{wins}` | 🛑 صفقات خاسرة: `{losses}`\n"
+            f"📂 الصفقات النشطة حالياً: `{active_trades_count} صفقات`\n"
+            f"🟢 *الحالة:* النظام المرن يعمل بكفاءة مع الوقف المتحرك وحماية رأس المال."
+        )
+        send_telegram_message(report_msg)
         try:
             with open(HEARTBEAT_FILE, "w") as f:
                 f.write(now.isoformat())
@@ -104,8 +128,8 @@ def get_coinbase_candles(product_id, granularity=3600, limit=100):
         return df
     except Exception as e:
         error_msg = f"Error fetching {product_id}: {e}"
-        print(error_msg)
         logging.error(error_msg)
+        send_telegram_message(f"🚨 *Emergency Alert (Flexible Bot):* فشل جلب بيانات الشموع للعملة `{product_id}` - الخطأ: {e}")
         return None
 
 def calculate_rsi(series, period=14):
@@ -138,7 +162,7 @@ def manage_and_scan_flexible_market():
         except Exception:
             pass
 
-    # 1. إدارة الصفقات المفتوحة مسبقاً (LONG & SHORT)
+    # 1. إدارة الصفقات المفتوحة (LONG & SHORT) مع Trailing Stop الأوتوماتيكي
     active_trades = []
     if os.path.exists(TRADE_FILE):
         try:
@@ -165,6 +189,11 @@ def manage_and_scan_flexible_market():
 
         closed = False
         if side == "LONG":
+            # Trailing Stop آلي: نقل SL لنقطة الدخول عند بلوغ 50% من الهدف
+            if curr_price >= (entry + (tp1 - entry) * 0.5) and sl < entry:
+                trade['SL'] = entry
+                send_telegram_message(f"🔄 *Flexible Trailing Stop Activated! (LONG {symbol})*\nStop Loss moved to Entry Price.")
+
             if curr_price >= tp1:
                 profit = (tp1 - entry) * qty
                 current_balance += profit
@@ -178,6 +207,11 @@ def manage_and_scan_flexible_market():
                 save_closed_trade({'Timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), 'Symbol': symbol, 'Side': side, 'Entry': entry, 'Exit': sl, 'Result': 'LOSS', 'PnL': round(-loss, 2)})
                 closed = True
         elif side == "SHORT":
+            # Trailing Stop آلي لصفقات البيع
+            if curr_price <= (entry - (entry - tp1) * 0.5) and sl > entry:
+                trade['SL'] = entry
+                send_telegram_message(f"🔄 *Flexible Trailing Stop Activated! (SHORT {symbol})*\nStop Loss moved to Entry Price.")
+
             if curr_price <= tp1:
                 profit = (entry - tp1) * qty
                 current_balance += profit
@@ -215,7 +249,7 @@ def manage_and_scan_flexible_market():
             mid_b = df.iloc[-1]['mid_band']
             curr_atr = df.iloc[-1]['atr']
 
-            # أ. شروط صفقات الشراء (LONG) - ارتداد من الحد السفلي لبولنجر وبدء التعافي
+            # أ. شروط صفقات الشراء (LONG)
             if curr_price <= lower_b and curr_rsi < 35:
                 entry = curr_price
                 sl = entry - (curr_atr * 1.5)
@@ -234,15 +268,13 @@ def manage_and_scan_flexible_market():
                     
                     msg = (
                         f"🚀 *Flexible Bot: New LONG Signal (Mean Reversion)*\n"
-                        f"🔹 Symbol: `{symbol}`\n"
-                        f"💰 Entry: `{entry:.4f}`\n"
-                        f"🎯 TP (Mid Band): `{tp1:.4f}` | 🛑 SL: `{sl:.4f}`\n"
-                        f"📊 RSI: `{curr_rsi:.1f}` | Qty: `{qty:.4f}`"
+                        f"🔹 Symbol: `{symbol}` | Entry: `{entry:.4f}`\n"
+                        f"🎯 TP: `{tp1:.4f}` | 🛑 SL: `{sl:.4f}` | RSI: `{curr_rsi:.1f}`"
                     )
                     send_telegram_message(msg)
                     break
 
-            # ب. شروط صفقات البيع (SHORT) - ارتداد من الحد العلوي لبولنجر وبدء الهبوط
+            # ب. شروط صفقات البيع (SHORT)
             elif curr_price >= upper_b and curr_rsi > 65:
                 entry = curr_price
                 sl = entry + (curr_atr * 1.5)
@@ -261,10 +293,8 @@ def manage_and_scan_flexible_market():
                     
                     msg = (
                         f"📉 *Flexible Bot: New SHORT Signal (Mean Reversion)*\n"
-                        f"🔹 Symbol: `{symbol}`\n"
-                        f"💰 Entry: `{entry:.4f}`\n"
-                        f"🎯 TP (Mid Band): `{tp1:.4f}` | 🛑 SL: `{sl:.4f}`\n"
-                        f"📊 RSI: `{curr_rsi:.1f}` | Qty: `{qty:.4f}`"
+                        f"🔹 Symbol: `{symbol}` | Entry: `{entry:.4f}`\n"
+                        f"🎯 TP: `{tp1:.4f}` | 🛑 SL: `{sl:.4f}` | RSI: `{curr_rsi:.1f}`"
                     )
                     send_telegram_message(msg)
                     break
@@ -278,6 +308,7 @@ def manage_and_scan_flexible_market():
     with open(BALANCE_FILE, "w") as f:
         f.write(str(current_balance))
 
+    check_daily_report(len(updated_trades), current_balance)
+
 if __name__ == "__main__":
-    check_heartbeat()
     manage_and_scan_flexible_market()
