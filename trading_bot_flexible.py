@@ -212,4 +212,72 @@ def manage_and_scan_flexible_market():
             curr_rsi = df.iloc[-1]['rsi']
             lower_b = df.iloc[-1]['lower_band']
             upper_b = df.iloc[-1]['upper_band']
-            mid_b = df
+            mid_b = df.iloc[-1]['mid_band']
+            curr_atr = df.iloc[-1]['atr']
+
+            # أ. شروط صفقات الشراء (LONG) - ارتداد من الحد السفلي لبولنجر وبدء التعافي
+            if curr_price <= lower_b and curr_rsi < 35:
+                entry = curr_price
+                sl = entry - (curr_atr * 1.5)
+                tp1 = mid_b
+                risk_amount = current_balance * RISK_PERCENTAGE
+                qty = risk_amount / (entry - sl) if (entry - sl) > 0 else 1.0
+                margin = (entry * qty) / LEVERAGE
+
+                if margin <= (current_balance * MAX_TOTAL_MARGIN_RATIO) and tp1 > entry:
+                    new_trade = {
+                        'Symbol': symbol, 'Side': 'LONG', 'Entry': entry,
+                        'TP1': tp1, 'SL': sl, 'Qty': qty
+                    }
+                    updated_trades.append(new_trade)
+                    open_symbols.append(symbol)
+                    
+                    msg = (
+                        f"🚀 *Flexible Bot: New LONG Signal (Mean Reversion)*\n"
+                        f"🔹 Symbol: `{symbol}`\n"
+                        f"💰 Entry: `{entry:.4f}`\n"
+                        f"🎯 TP (Mid Band): `{tp1:.4f}` | 🛑 SL: `{sl:.4f}`\n"
+                        f"📊 RSI: `{curr_rsi:.1f}` | Qty: `{qty:.4f}`"
+                    )
+                    send_telegram_message(msg)
+                    break
+
+            # ب. شروط صفقات البيع (SHORT) - ارتداد من الحد العلوي لبولنجر وبدء الهبوط
+            elif curr_price >= upper_b and curr_rsi > 65:
+                entry = curr_price
+                sl = entry + (curr_atr * 1.5)
+                tp1 = mid_b
+                risk_amount = current_balance * RISK_PERCENTAGE
+                qty = risk_amount / (sl - entry) if (sl - entry) > 0 else 1.0
+                margin = (entry * qty) / LEVERAGE
+
+                if margin <= (current_balance * MAX_TOTAL_MARGIN_RATIO) and entry > tp1:
+                    new_trade = {
+                        'Symbol': symbol, 'Side': 'SHORT', 'Entry': entry,
+                        'TP1': tp1, 'SL': sl, 'Qty': qty
+                    }
+                    updated_trades.append(new_trade)
+                    open_symbols.append(symbol)
+                    
+                    msg = (
+                        f"📉 *Flexible Bot: New SHORT Signal (Mean Reversion)*\n"
+                        f"🔹 Symbol: `{symbol}`\n"
+                        f"💰 Entry: `{entry:.4f}`\n"
+                        f"🎯 TP (Mid Band): `{tp1:.4f}` | 🛑 SL: `{sl:.4f}`\n"
+                        f"📊 RSI: `{curr_rsi:.1f}` | Qty: `{qty:.4f}`"
+                    )
+                    send_telegram_message(msg)
+                    break
+
+    if updated_trades:
+        pd.DataFrame(updated_trades).to_csv(TRADE_FILE, index=False)
+    else:
+        if os.path.exists(TRADE_FILE):
+            os.remove(TRADE_FILE)
+
+    with open(BALANCE_FILE, "w") as f:
+        f.write(str(current_balance))
+
+if __name__ == "__main__":
+    check_heartbeat()
+    manage_and_scan_flexible_market()
