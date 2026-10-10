@@ -5,30 +5,27 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 
-# --- إعداد نظام تسجيل الأخطاء (Error Logging) ---
+# --- إعداد نظام تسجيل الأخطاء ---
 logging.basicConfig(
     filename='bot_errors.log',
     level=logging.ERROR,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 
-# --- إعدادات تيليجرام ---
+# مفاتيح تيليجرام للبوت المتوازن
 TELEGRAM_BOT_TOKEN = "8772493944:AAGb4Y1VuBLrCq0vfvnhue7oRW4hjf_LYJE"
 TELEGRAM_CHAT_ID = "5620413191"
 
-# --- إعدادات رأس المال وإدارة المخاطر ---
 INITIAL_BALANCE = 200.0        
 RISK_PERCENTAGE = 0.02        
 LEVERAGE = 3                 
-MAX_TOTAL_MARGIN_RATIO = 0.6  # أقصى نسبة مسموح بها من الرصيد كإجمالي هوامش مفتوحة (60%)
+MAX_TOTAL_MARGIN_RATIO = 0.6  
 
-# --- ملفات السجلات والأرشيف ---
 TRADE_FILE = "active_balanced_trades.csv"
 BALANCE_FILE = "balanced_balance.txt"
 CLOSED_FILE = "closed_trades_history.csv"
 HEARTBEAT_FILE = "last_balanced_heartbeat.txt"
 
-# --- سلة العملات المعتمدة ---
 COINBASE_PRODUCTS = {
     "BTCUSDT": "BTC-USD",
     "ETHUSDT": "ETH-USD",
@@ -42,14 +39,9 @@ def send_telegram_message(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "Markdown"}
     try:
-        response = requests.post(url, json=payload, timeout=10)
+        requests.post(url, json=payload, timeout=10)
     except Exception as e:
-        error_msg = f"Telegram Error: {e}"
-        logging.error(error_msg)
-        try:
-            requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": f"🚨 *Emergency Alert (Balanced Bot):* فشل الاتصال بتيليجرام: {e}", "parse_mode": "Markdown"}, timeout=5)
-        except:
-            pass
+        logging.error(f"Telegram Error: {e}")
 
 def check_daily_report(active_trades_count, current_balance):
     now = datetime.utcnow()
@@ -79,31 +71,30 @@ def check_daily_report(active_trades_count, current_balance):
 
         roi_percent = ((current_balance - INITIAL_BALANCE) / INITIAL_BALANCE) * 100
         report_msg = (
-            f"📊 *Balanced Bot: التقرير اليومي الشامل الاحترافي*\n"
+            f"📊 *Balanced Bot (30m): التقرير اليومي الشامل*\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
             f"⏰ الوقت: `{now.strftime('%Y-%m-%d %H:%M:%S')} UTC`\n"
             f"💰 الرصيد الحالي: `${current_balance:.2f}` (ROI: `{roi_percent:+.2f}%`)\n"
             f"📈 إجمالي الأرباح/الخسائر: `${total_pnl:+.2f}`\n"
             f"🎯 صفقات رابحة: `{wins}` | 🛑 صفقات خاسرة: `{losses}`\n"
             f"📂 الصفقات النشطة حالياً: `{active_trades_count} صفقات`\n"
-            f"🟢 *الحالة:* البوت المتوازن يعمل بكفاءة تامة مع الوقف المتحرك وحماية رأس المال."
+            f"⚡ *الحالة:* البوت المتوازن يشتغل بنشاط على فريم الـ 30 دقيقة."
         )
         send_telegram_message(report_msg)
         try:
             with open(HEARTBEAT_FILE, "w") as f:
                 f.write(now.isoformat())
         except Exception as e:
-            logging.error(f"Error writing heartbeat file: {e}")
+            logging.error(f"Error writing heartbeat: {e}")
 
 def save_closed_trade(trade_data):
     file_exists = os.path.exists(CLOSED_FILE)
-    df = pd.DataFrame([trade_data])
     try:
-        df.to_csv(CLOSED_FILE, mode='a', header=not file_exists, index=False)
+        pd.DataFrame([trade_data]).to_csv(CLOSED_FILE, mode='a', header=not file_exists, index=False)
     except Exception as e:
         logging.error(f"Error saving closed trade: {e}")
 
-def get_coinbase_candles(product_id, granularity=3600, limit=100):
+def get_coinbase_candles(product_id, granularity=1800, limit=100): # 1800s = 30 min
     url = f"https://api.exchange.coinbase.com/products/{product_id}/candles?granularity={granularity}"
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
@@ -111,25 +102,11 @@ def get_coinbase_candles(product_id, granularity=3600, limit=100):
         data = response.json()
         if not isinstance(data, list) or len(data) == 0:
             return None
-            
-        df_list = []
-        for item in reversed(data):
-            df_list.append({
-                'timestamp': item[0] * 1000,
-                'low': float(item[1]),
-                'high': float(item[2]),
-                'open': float(item[3]),
-                'close': float(item[4]),
-                'volume': float(item[5])
-            })
+        df_list = [{'timestamp': item[0] * 1000, 'low': float(item[1]), 'high': float(item[2]), 'open': float(item[3]), 'close': float(item[4]), 'volume': float(item[5])} for item in reversed(data)]
         df = pd.DataFrame(df_list)
-        if len(df) > limit:
-            df = df.tail(limit).reset_index(drop=True)
-        return df
+        return df.tail(limit).reset_index(drop=True) if len(df) > limit else df
     except Exception as e:
-        error_msg = f"Error fetching {product_id}: {e}"
-        logging.error(error_msg)
-        send_telegram_message(f"🚨 *Emergency Alert (Balanced Bot):* فشل جلب الشموع للعملة `{product_id}` - الخطأ: {e}")
+        logging.error(f"Error fetching {product_id}: {e}")
         return None
 
 def calculate_rsi(series, period=14):
@@ -155,7 +132,6 @@ def manage_and_scan_market():
         except Exception:
             pass
 
-    # 1. إدارة الصفقات المفتوحة (LONG & SHORT) مع Trailing Stop الأوتوماتيكي
     active_trades = []
     if os.path.exists(TRADE_FILE):
         try:
@@ -168,7 +144,7 @@ def manage_and_scan_market():
 
     for trade in active_trades:
         symbol = trade['Symbol']
-        df = get_coinbase_candles(COINBASE_PRODUCTS.get(symbol, "BTC-USD"), granularity=3600, limit=5)
+        df = get_coinbase_candles(COINBASE_PRODUCTS.get(symbol, "BTC-USD"), granularity=1800, limit=5)
         if df is None or df.empty:
             updated_trades.append(trade)
             continue
@@ -182,7 +158,6 @@ def manage_and_scan_market():
 
         closed = False
         if side == "LONG":
-            # Trailing Stop آلي: نقل SL لنقطة الدخول عند بلوغ 50% من الهدف الأول
             if curr_price >= (entry + (tp1 - entry) * 0.5) and sl < entry:
                 trade['SL'] = entry
                 send_telegram_message(f"🔄 *Balanced Trailing Stop Activated! (LONG {symbol})*\nStop Loss moved to Entry Price.")
@@ -200,7 +175,6 @@ def manage_and_scan_market():
                 save_closed_trade({'Timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), 'Symbol': symbol, 'Side': side, 'Entry': entry, 'Exit': sl, 'Result': 'LOSS', 'PnL': round(-loss, 2)})
                 closed = True
         elif side == "SHORT":
-            # Trailing Stop آلي لصفقات البيع
             if curr_price <= (entry - (entry - tp1) * 0.5) and sl > entry:
                 trade['SL'] = entry
                 send_telegram_message(f"🔄 *Balanced Trailing Stop Activated! (SHORT {symbol})*\nStop Loss moved to Entry Price.")
@@ -221,13 +195,12 @@ def manage_and_scan_market():
         if not closed:
             updated_trades.append(trade)
 
-    # 2. فحص السوق لاقتناص صفقات جديدة (LONG & SHORT)
     if len(updated_trades) < 3:
         for symbol, coinbase_id in COINBASE_PRODUCTS.items():
             if symbol in open_symbols:
                 continue
                 
-            df = get_coinbase_candles(coinbase_id, granularity=3600, limit=50)
+            df = get_coinbase_candles(coinbase_id, granularity=1800, limit=50) # 30 min candles
             if df is None or len(df) < 20:
                 continue
                 
@@ -240,8 +213,8 @@ def manage_and_scan_market():
             avg_volume = df['volume'].tail(10).mean()
             curr_volume = df.iloc[-1]['volume']
 
-            # أ. شروط صفقات الشراء (LONG)
-            if curr_rsi < 35 and curr_volume > (avg_volume * 1.1):
+            # شروط LONG مرنة (RSI < 40)
+            if curr_rsi < 40 and curr_volume > (avg_volume * 1.0):
                 entry = curr_price
                 sl = entry - (curr_atr * 1.5)
                 tp1 = entry + (curr_atr * 2.0)
@@ -250,23 +223,14 @@ def manage_and_scan_market():
                 margin = (entry * qty) / LEVERAGE
 
                 if margin <= (current_balance * MAX_TOTAL_MARGIN_RATIO) and tp1 > entry:
-                    new_trade = {
-                        'Symbol': symbol, 'Side': 'LONG', 'Entry': entry,
-                        'TP1': tp1, 'SL': sl, 'Qty': qty
-                    }
+                    new_trade = {'Symbol': symbol, 'Side': 'LONG', 'Entry': entry, 'TP1': tp1, 'SL': sl, 'Qty': qty}
                     updated_trades.append(new_trade)
                     open_symbols.append(symbol)
-                    
-                    msg = (
-                        f"🚀 *Balanced Bot: New LONG Signal!*\n"
-                        f"🔹 Symbol: `{symbol}` | Entry: `{entry:.4f}`\n"
-                        f"🎯 TP1: `{tp1:.4f}` | 🛑 SL: `{sl:.4f}` | RSI: `{curr_rsi:.1f}`"
-                    )
-                    send_telegram_message(msg)
+                    send_telegram_message(f"🚀 *Balanced Bot (30m): New LONG Signal!*\n🔹 Symbol: `{symbol}` | Entry: `{entry:.4f}`\n🎯 TP1: `{tp1:.4f}` | 🛑 SL: `{sl:.4f}` | RSI: `{curr_rsi:.1f}`")
                     break
 
-            # ب. شروط صفقات البيع (SHORT)
-            elif curr_rsi > 65 and curr_volume > (avg_volume * 1.1):
+            # شروط SHORT مرنة (RSI > 60)
+            elif curr_rsi > 60 and curr_volume > (avg_volume * 1.0):
                 entry = curr_price
                 sl = entry + (curr_atr * 1.5)
                 tp1 = entry - (curr_atr * 2.0)
@@ -275,22 +239,12 @@ def manage_and_scan_market():
                 margin = (entry * qty) / LEVERAGE
 
                 if margin <= (current_balance * MAX_TOTAL_MARGIN_RATIO) and entry > tp1:
-                    new_trade = {
-                        'Symbol': symbol, 'Side': 'SHORT', 'Entry': entry,
-                        'TP1': tp1, 'SL': sl, 'Qty': qty
-                    }
+                    new_trade = {'Symbol': symbol, 'Side': 'SHORT', 'Entry': entry, 'TP1': tp1, 'SL': sl, 'Qty': qty}
                     updated_trades.append(new_trade)
                     open_symbols.append(symbol)
-                    
-                    msg = (
-                        f"📉 *Balanced Bot: New SHORT Signal!*\n"
-                        f"🔹 Symbol: `{symbol}` | Entry: `{entry:.4f}`\n"
-                        f"🎯 TP1: `{tp1:.4f}` | 🛑 SL: `{sl:.4f}` | RSI: `{curr_rsi:.1f}`"
-                    )
-                    send_telegram_message(msg)
+                    send_telegram_message(f"📉 *Balanced Bot (30m): New SHORT Signal!*\n🔹 Symbol: `{symbol}` | Entry: `{entry:.4f}`\n🎯 TP1: `{tp1:.4f}` | 🛑 SL: `{sl:.4f}` | RSI: `{curr_rsi:.1f}`")
                     break
 
-    # حفظ الصفقات والملفات
     if updated_trades:
         pd.DataFrame(updated_trades).to_csv(TRADE_FILE, index=False)
     else:
