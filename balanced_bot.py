@@ -12,7 +12,6 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 
-# مفاتيح تيليجرام للبوت المتوازن
 TELEGRAM_BOT_TOKEN = "8772493944:AAGb4Y1VuBLrCq0vfvnhue7oRW4hjf_LYJE"
 TELEGRAM_CHAT_ID = "5620413191"
 
@@ -78,7 +77,7 @@ def check_daily_report(active_trades_count, current_balance):
             f"📈 إجمالي الأرباح/الخسائر: `${total_pnl:+.2f}`\n"
             f"🎯 صفقات رابحة: `{wins}` | 🛑 صفقات خاسرة: `{losses}`\n"
             f"📂 الصفقات النشطة حالياً: `{active_trades_count} صفقات`\n"
-            f"⚡ *الحالة:* البوت المتوازن يشتغل بنشاط على فريم الـ 30 دقيقة."
+            f"⚡ *الرافعة المستخدمة:* `{LEVERAGE}x` | *المخاطرة لكل صفقة:* `{RISK_PERCENTAGE*100}%`"
         )
         send_telegram_message(report_msg)
         try:
@@ -94,7 +93,7 @@ def save_closed_trade(trade_data):
     except Exception as e:
         logging.error(f"Error saving closed trade: {e}")
 
-def get_coinbase_candles(product_id, granularity=1800, limit=100): # 1800s = 30 min
+def get_coinbase_candles(product_id, granularity=1800, limit=100):
     url = f"https://api.exchange.coinbase.com/products/{product_id}/candles?granularity={granularity}"
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
@@ -160,35 +159,90 @@ def manage_and_scan_market():
         if side == "LONG":
             if curr_price >= (entry + (tp1 - entry) * 0.5) and sl < entry:
                 trade['SL'] = entry
-                send_telegram_message(f"🔄 *Balanced Trailing Stop Activated! (LONG {symbol})*\nStop Loss moved to Entry Price.")
+                msg = (
+                    f"🔄 *Balanced Trailing Stop Activated! (LONG {symbol})*\n"
+                    f"━━━━━━━━━━━━━━━━━━━\n"
+                    f"🔹 السعر الحالي: `{curr_price:.4f}` | سعر الدخول: `{entry:.4f}`\n"
+                    f"🛡️ تم نقل وقف الخسارة إلى سعر الدخول للحماية.\n"
+                    f"⚡ الرافعة: `{LEVERAGE}x` | 🎯 الهدف: `{tp1:.4f}`"
+                )
+                send_telegram_message(msg)
 
             if curr_price >= tp1:
                 profit = (tp1 - entry) * qty
+                profit_percent = ((tp1 - entry) / entry) * 100 * LEVERAGE
                 current_balance += profit
-                send_telegram_message(f"🎯 *Balanced TP Reached! (LONG {symbol})*\nProfit: `+${profit:.2f}`\nBalance: `${current_balance:.2f}`")
+                msg = (
+                    f"🎯 *Balanced TP Reached! (LONG {symbol})*\n"
+                    f"━━━━━━━━━━━━━━━━━━━\n"
+                    f"🔹 سعر الدخول: `{entry:.4f}` | سعر الإغلاق: `{tp1:.4f}`\n"
+                    f"🛑 وقف الخسارة السابق: `{sl:.4f}`\n"
+                    f"⚡ الرافعة المالية: `{LEVERAGE}x`\n"
+                    f"💰 الربح المحقق: `+${profit:.2f}` (`+{profit_percent:.2f}%`)\n"
+                    f"💵 الرصيد الإجمالي الجديد: `${current_balance:.2f}`"
+                )
+                send_telegram_message(msg)
                 save_closed_trade({'Timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), 'Symbol': symbol, 'Side': side, 'Entry': entry, 'Exit': tp1, 'Result': 'WIN', 'PnL': round(profit, 2)})
                 closed = True
             elif curr_price <= sl:
                 loss = (entry - sl) * qty
+                loss_percent = ((entry - sl) / entry) * 100 * LEVERAGE
                 current_balance -= loss
-                send_telegram_message(f"🛑 *Balanced Stop Loss Hit! (LONG {symbol})*\nLoss: `-${loss:.2f}`\nBalance: `${current_balance:.2f}`")
+                msg = (
+                    f"🛑 *Balanced Stop Loss Hit! (LONG {symbol})*\n"
+                    f"━━━━━━━━━━━━━━━━━━━\n"
+                    f"🔹 سعر الدخول: `{entry:.4f}` | سعر الإغلاق: `{sl:.4f}`\n"
+                    f"🎯 الهدف المقابل: `{tp1:.4f}`\n"
+                    f"⚡ الرافعة المالية: `{LEVERAGE}x`\n"
+                    f"📉 الخسارة المحققة: `-${loss:.2f}` (`-{loss_percent:.2f}%`)\n"
+                    f"💵 الرصيد الإجمالي الجديد: `${current_balance:.2f}`"
+                )
+                send_telegram_message(msg)
                 save_closed_trade({'Timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), 'Symbol': symbol, 'Side': side, 'Entry': entry, 'Exit': sl, 'Result': 'LOSS', 'PnL': round(-loss, 2)})
                 closed = True
+
         elif side == "SHORT":
             if curr_price <= (entry - (entry - tp1) * 0.5) and sl > entry:
                 trade['SL'] = entry
-                send_telegram_message(f"🔄 *Balanced Trailing Stop Activated! (SHORT {symbol})*\nStop Loss moved to Entry Price.")
+                msg = (
+                    f"🔄 *Balanced Trailing Stop Activated! (SHORT {symbol})*\n"
+                    f"━━━━━━━━━━━━━━━━━━━\n"
+                    f"🔹 السعر الحالي: `{curr_price:.4f}` | سعر الدخول: `{entry:.4f}`\n"
+                    f"🛡️ تم نقل وقف الخسارة إلى سعر الدخول للحماية.\n"
+                    f"⚡ الرافعة: `{LEVERAGE}x` | 🎯 الهدف: `{tp1:.4f}`"
+                )
+                send_telegram_message(msg)
 
             if curr_price <= tp1:
                 profit = (entry - tp1) * qty
+                profit_percent = ((entry - tp1) / entry) * 100 * LEVERAGE
                 current_balance += profit
-                send_telegram_message(f"🎯 *Balanced TP Reached! (SHORT {symbol})*\nProfit: `+${profit:.2f}`\nBalance: `${current_balance:.2f}`")
+                msg = (
+                    f"🎯 *Balanced TP Reached! (SHORT {symbol})*\n"
+                    f"━━━━━━━━━━━━━━━━━━━\n"
+                    f"🔹 سعر الدخول: `{entry:.4f}` | سعر الإغلاق: `{tp1:.4f}`\n"
+                    f"🛑 وقف الخسارة السابق: `{sl:.4f}`\n"
+                    f"⚡ الرافعة المالية: `{LEVERAGE}x`\n"
+                    f"💰 الربح المحقق: `+${profit:.2f}` (`+{profit_percent:.2f}%`)\n"
+                    f"💵 الرصيد الإجمالي الجديد: `${current_balance:.2f}`"
+                )
+                send_telegram_message(msg)
                 save_closed_trade({'Timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), 'Symbol': symbol, 'Side': side, 'Entry': entry, 'Exit': tp1, 'Result': 'WIN', 'PnL': round(profit, 2)})
                 closed = True
             elif curr_price >= sl:
                 loss = (sl - entry) * qty
+                loss_percent = ((sl - entry) / entry) * 100 * LEVERAGE
                 current_balance -= loss
-                send_telegram_message(f"🛑 *Balanced Stop Loss Hit! (SHORT {symbol})*\nLoss: `-${loss:.2f}`\nBalance: `${current_balance:.2f}`")
+                msg = (
+                    f"🛑 *Balanced Stop Loss Hit! (SHORT {symbol})*\n"
+                    f"━━━━━━━━━━━━━━━━━━━\n"
+                    f"🔹 سعر الدخول: `{entry:.4f}` | سعر الإغلاق: `{sl:.4f}`\n"
+                    f"🎯 الهدف المقابل: `{tp1:.4f}`\n"
+                    f"⚡ الرافعة المالية: `{LEVERAGE}x`\n"
+                    f"📉 الخسارة المحققة: `-${loss:.2f}` (`-{loss_percent:.2f}%`)\n"
+                    f"💵 الرصيد الإجمالي الجديد: `${current_balance:.2f}`"
+                )
+                send_telegram_message(msg)
                 save_closed_trade({'Timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), 'Symbol': symbol, 'Side': side, 'Entry': entry, 'Exit': sl, 'Result': 'LOSS', 'PnL': round(-loss, 2)})
                 closed = True
 
@@ -200,7 +254,7 @@ def manage_and_scan_market():
             if symbol in open_symbols:
                 continue
                 
-            df = get_coinbase_candles(coinbase_id, granularity=1800, limit=50) # 30 min candles
+            df = get_coinbase_candles(coinbase_id, granularity=1800, limit=50)
             if df is None or len(df) < 20:
                 continue
                 
@@ -213,7 +267,6 @@ def manage_and_scan_market():
             avg_volume = df['volume'].tail(10).mean()
             curr_volume = df.iloc[-1]['volume']
 
-            # شروط LONG مرنة (RSI < 40)
             if curr_rsi < 40 and curr_volume > (avg_volume * 1.0):
                 entry = curr_price
                 sl = entry - (curr_atr * 1.5)
@@ -226,10 +279,19 @@ def manage_and_scan_market():
                     new_trade = {'Symbol': symbol, 'Side': 'LONG', 'Entry': entry, 'TP1': tp1, 'SL': sl, 'Qty': qty}
                     updated_trades.append(new_trade)
                     open_symbols.append(symbol)
-                    send_telegram_message(f"🚀 *Balanced Bot (30m): New LONG Signal!*\n🔹 Symbol: `{symbol}` | Entry: `{entry:.4f}`\n🎯 TP1: `{tp1:.4f}` | 🛑 SL: `{sl:.4f}` | RSI: `{curr_rsi:.1f}`")
+                    msg = (
+                        f"🚀 *Balanced Bot (30m): New LONG Signal*\n"
+                        f"━━━━━━━━━━━━━━━━━━━\n"
+                        f"🔹 الرمز: `{symbol}` | نوع الصفقة: `LONG`\n"
+                        f"📍 سعر الدخول (Entry): `{entry:.4f}`\n"
+                        f"🎯 هدف الربح (TP): `{tp1:.4f}`\n"
+                        f"🛑 وقف الخسارة (SL): `{sl:.4f}`\n"
+                        f"⚡ الرافعة المالية: `{LEVERAGE}x` | المخاطرة: `{RISK_PERCENTAGE*100}%`\n"
+                        f"💵 الرصيد الحالي: `${current_balance:.2f}`"
+                    )
+                    send_telegram_message(msg)
                     break
 
-            # شروط SHORT مرنة (RSI > 60)
             elif curr_rsi > 60 and curr_volume > (avg_volume * 1.0):
                 entry = curr_price
                 sl = entry + (curr_atr * 1.5)
@@ -242,7 +304,17 @@ def manage_and_scan_market():
                     new_trade = {'Symbol': symbol, 'Side': 'SHORT', 'Entry': entry, 'TP1': tp1, 'SL': sl, 'Qty': qty}
                     updated_trades.append(new_trade)
                     open_symbols.append(symbol)
-                    send_telegram_message(f"📉 *Balanced Bot (30m): New SHORT Signal!*\n🔹 Symbol: `{symbol}` | Entry: `{entry:.4f}`\n🎯 TP1: `{tp1:.4f}` | 🛑 SL: `{sl:.4f}` | RSI: `{curr_rsi:.1f}`")
+                    msg = (
+                        f"📉 *Balanced Bot (30m): New SHORT Signal*\n"
+                        f"━━━━━━━━━━━━━━━━━━━\n"
+                        f"🔹 الرمز: `{symbol}` | نوع الصفقة: `SHORT`\n"
+                        f"📍 سعر الدخول (Entry): `{entry:.4f}`\n"
+                        f"🎯 هدف الربح (TP): `{tp1:.4f}`\n"
+                        f"🛑 وقف الخسارة (SL): `{sl:.4f}`\n"
+                        f"⚡ الرافعة المالية: `{LEVERAGE}x` | المخاطرة: `{RISK_PERCENTAGE*100}%`\n"
+                        f"💵 الرصيد الحالي: `${current_balance:.2f}`"
+                    )
+                    send_telegram_message(msg)
                     break
 
     if updated_trades:
