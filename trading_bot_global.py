@@ -98,23 +98,3 @@ def get_coinbase_candles(product_id, granularity=3600, limit=100):
     url = f"https://api.exchange.coinbase.com/products/{product_id}/candles?granularity={granularity}"
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
-        response = requests.get(url, headers=headers, timeout=10)
-        data = response.json()
-        if not isinstance(data, list) or len(data) == 0:
-            return None
-        df_list = [{'timestamp': item[0] * 1000, 'low': float(item[1]), 'high': float(item[2]), 'open': float(item[3]), 'close': float(item[4]), 'volume': float(item[5])} for item in reversed(data)]
-        df = pd.DataFrame(df_list)
-        return df.tail(limit).reset_index(drop=True) if len(df) > limit else df
-    except Exception as e:
-        logging.error(f"Error fetching {product_id}: {e}")
-        return None
-
-def calculate_atr(df, period=14):
-    high_low = df['high'] - df['low']
-    high_close = np.abs(df['high'] - df['close'].shift())
-    low_close = np.abs(df['low'] - df['close'].shift())
-    tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
-    return tr.rolling(window=period).mean()
-
-def find_support_resistance(df, window=20):
-    support = df['low'].rolling(window=window, center=False
