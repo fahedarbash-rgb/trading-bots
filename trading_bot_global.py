@@ -98,3 +98,246 @@ def get_coinbase_candles(product_id, granularity=3600, limit=100):
     url = f"https://api.exchange.coinbase.com/products/{product_id}/candles?granularity={granularity}"
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
+        response = requests.get(url, headers=headers, timeout=10)
+        data = response.json()
+        if not isinstance(data, list) or len(data) == 0:
+            return None
+        df_list = [{'timestamp': item[0] * 1000, 'low': float(item[1]), 'high': float(item[2]), 'open': float(item[3]), 'close': float(item[4]), 'volume': float(item[5])} for item in reversed(data)]
+        df = pd.DataFrame(df_list)
+        return df.tail(limit).reset_index(drop=True) if len(df) > limit else df
+    except Exception as e:
+        logging.error(f"Error fetching {product_id}: {e}")
+        return None
+
+def calculate_atr(df, period=14):
+    high_low = df['high'] - df['low']
+    high_close = np.abs(df['high'] - df['close'].shift())
+    low_close = np.abs(df['low'] - df['close'].shift())
+    tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+    return tr.rolling(window=period).mean()
+
+def find_support_resistance(df, window=20):
+    support = df['low'].rolling(window=window, center=False).min().iloc[-1]
+    resistance = df['high'].rolling(window=window, center=False).max().iloc[-1]
+    return support, resistance
+
+def manage_and_scan_sr_market():
+    current_balance = INITIAL_BALANCE
+    if os.path.exists(BALANCE_FILE):
+        try:
+            with open(BALANCE_FILE, "r") as f:
+                current_balance = float(f.read().strip())
+        except Exception:
+            pass
+
+    active_trades = []
+    if os.path.exists(TRADE_FILE):
+        try:
+            active_trades = pd.read_csv(TRADE_FILE).to_dict('records')
+        except Exception:
+            pass
+
+    updated_trades = []
+    open_symbols = [t['Symbol'] for t in active_trades]
+
+    for trade in active_trades:
+        symbol = trade['Symbol']
+        df = get_coinbase_candles(GLOBAL_PRODUCTS.get(symbol, "BTC-USD"), granularity=3600, limit=5)
+        if df is None or df.empty:
+            updated_trades.append(trade)
+            continue
+
+        curr_price = df.iloc[-1]['close']
+        entry = trade['Entry']
+        tp1 = trade['TP1']
+        sl = trade['SL']
+        qty = trade['Qty']
+        side = trade['Side']
+
+        closed = False
+        if side == "LONG":
+            if curr_price >= (entry + (tp1 - entry) * 0.5) and sl < entry:
+                trade['SL'] = entry
+                msg = (
+                    f"🔄 *Global S&R Trailing Stop Activated! (LONG {symbol})*\n"
+                    f"━━━━━━━━━━━━━━━━━━━\n"
+                    f"🔹 السعر الحالي: `{curr_price:.4f}` | سعر الدخول: `{entry:.4f}`\n"
+                    f"🛡️ تم نقل وقف الخسارة إلى سعر الدخول للحماية.\n"
+                    f"⚡ الرافعة: `{LEVERAGE}x` | 🎯 الهدف: `{tp1:.4f}`"
+                )
+                send_telegram_message(msg)
+
+            if curr_price >= tp1:
+                profit = (tp1 - entry) * qty
+                profit_percent = ((tp1 - entry) / entry) * 100 * LEVERAGE
+                current_balance += profit
+                msg = (
+                    f"🎯 *Global S&R TP Reached! (LONG {symbol})*\n"
+                    f"━━━━━━━━━━━━━━━━━━━\n"
+                    f"🔹 سعر الدخول: `{entry:.4f}` | سعر الإغلاق: `{tp1:.4f}`\n"
+                    f"🛑 وقف الخسارة السابق: `{sl:.4f}`\n"
+                    f"⚡ الرافعة المالية: `{LEVERAGE}x`\n"
+                    f"💰 الربح المحقق: `+${profit:.2f}` (`+{profit_percent:.2f}%`)\n"
+                    f"💵 الرصيد الإجمالي الجديد: `${current_balance:.2f}`"
+                )
+                send_telegram_message(msg)
+                save_closed_trade({'Timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), 'Symbol': symbol, 'Side': side, 'Entry': entry, 'Exit': tp1, 'Result': 'WIN', 'PnL': round(profit, 2)})
+                closed = True
+            elif curr_price <= sl:
+                loss = (entry - sl) * qty
+                loss_percent = ((entry - sl) / entry) * 100 * LEVERAGE
+                current_balance -= loss
+                msg = (
+                    f"🛑 *Global S&R Stop Loss Hit! (LONG {symbol})*\n"
+                    f"━━━━━━━━━━━━━━━━━━━\n"
+                    f"🔹 سعر الدخول: `{entry:.4f}` | سعر الإغلاق: `{sl:.4f}`\n"
+                    f"🎯 الهدف المقابل: `{tp1:.4f}`\n"
+                    f"⚡ الرافعة المالية: `{LEVERAGE}x`\n"
+                    f"📉 الخسارة المحققة: `-${loss:.2f}` (`-{loss_percent:.2f}%`)\n"
+                    f"💵 الرصيد الإجمالي الجديد: `${current_balance:.2f}`"
+                )
+                send_telegram_message(msg)
+                save_closed_trade({'Timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), 'Symbol': symbol, 'Side': side, 'Entry': entry, 'Exit': sl, 'Result': 'LOSS', 'PnL': round(-loss, 2)})
+                closed = True
+        elif side == "SHORT":
+            if curr_price <= (entry - (entry - tp1) * 0.5) and sl > entry:
+                trade['SL'] = entry
+                msg = (
+                    f"🔄 *Global S&R Trailing Stop Activated! (SHORT {symbol})*\n"
+                    f"━━━━━━━━━━━━━━━━━━━\n"
+                    f"🔹 السعر الحالي: `{curr_price:.4f}` | سعر الدخول: `{entry:.4f}`\n"
+                    f"🛡️ تم نقل وقف الخسارة إلى سعر الدخول للحماية.\n"
+                    f"⚡ الرافعة: `{LEVERAGE}x` | 🎯 الهدف: `{tp1:.4f}`"
+                )
+                send_telegram_message(msg)
+
+            if curr_price <= tp1:
+                profit = (entry - tp1) * qty
+                profit_percent = ((entry - tp1) / entry) * 100 * LEVERAGE
+                current_balance += profit
+                msg = (
+                    f"🎯 *Global S&R TP Reached! (SHORT {symbol})*\n"
+                    f"━━━━━━━━━━━━━━━━━━━\n"
+                    f"🔹 سعر الدخول: `{entry:.4f}` | سعر الإغلاق: `{tp1:.4f}`\n"
+                    f"🛑 وقف الخسارة السابق: `{sl:.4f}`\n"
+                    f"⚡ الرافعة المالية: `{LEVERAGE}x`\n"
+                    f"💰 الربح المحقق: `+${profit:.2f}` (`+{profit_percent:.2f}%`)\n"
+                    f"💵 الرصيد الإجمالي الجديد: `${current_balance:.2f}`"
+                )
+                send_telegram_message(msg)
+                save_closed_trade({'Timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), 'Symbol': symbol, 'Side': side, 'Entry': entry, 'Exit': tp1, 'Result': 'WIN', 'PnL': round(profit, 2)})
+                closed = True
+            elif curr_price >= sl:
+                loss = (sl - entry) * qty
+                loss_percent = ((sl - entry) / entry) * 100 * LEVERAGE
+                current_balance -= loss
+                msg = (
+                    f"🛑 *Global S&R Stop Loss Hit! (SHORT {symbol})*\n"
+                    f"━━━━━━━━━━━━━━━━━━━\n"
+                    f"🔹 سعر الدخول: `{entry:.4f}` | سعر الإغلاق: `{sl:.4f}`\n"
+                    f"🎯 الهدف المقابل: `{tp1:.4f}`\n"
+                    f"⚡ الرافعة المالية: `{LEVERAGE}x`\n"
+                    f"📉 الخسارة المحققة: `-${loss:.2f}` (`-{loss_percent:.2f}%`)\n"
+                    f"💵 الرصيد الإجمالي الجديد: `${current_balance:.2f}`"
+                )
+                send_telegram_message(msg)
+                save_closed_trade({'Timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), 'Symbol': symbol, 'Side': side, 'Entry': entry, 'Exit': sl, 'Result': 'LOSS', 'PnL': round(-loss, 2)})
+                closed = True
+
+        if not closed:
+            updated_trades.append(trade)
+
+    if len(updated_trades) < 4:
+        for symbol, coinbase_id in GLOBAL_PRODUCTS.items():
+            if symbol in open_symbols:
+                continue
+
+            df_4h = get_coinbase_candles(coinbase_id, granularity=21600, limit=30)
+            df_1h = get_coinbase_candles(coinbase_id, granularity=3600, limit=50)
+
+            if df_4h is None or len(df_4h) < 20 or df_1h is None or len(df_1h) < 30:
+                continue
+
+            df_4h['ema50'] = df_4h['close'].ewm(span=50, adjust=False).mean()
+            trend_4h = "BULLISH" if df_4h.iloc[-1]['close'] > df_4h.iloc[-1]['ema50'] else "BEARISH"
+
+            df_1h['atr'] = calculate_atr(df_1h, 14)
+            df_1h['avg_volume'] = df_1h['volume'].rolling(window=15).mean()
+            support, resistance = find_support_resistance(df_1h, window=20)
+
+            curr_price = df_1h.iloc[-1]['close']
+            curr_volume = df_1h.iloc[-1]['volume']
+            avg_volume = df_1h.iloc[-1]['avg_volume']
+            curr_atr = df_1h.iloc[-1]['atr']
+
+            is_volume_confirmed = curr_volume >= (avg_volume * 0.75)
+
+            if (trend_4h == "BULLISH" and 
+                abs(curr_price - support) <= (curr_atr * 1.0) and curr_price >= support and 
+                is_volume_confirmed):
+
+                entry = curr_price
+                sl = support - (curr_atr * 1.2)
+                tp1 = resistance
+                risk_amount = current_balance * RISK_PERCENTAGE
+                qty = risk_amount / (entry - sl) if (entry - sl) > 0 else 1.0
+                margin = (entry * qty) / LEVERAGE
+
+                if margin <= (current_balance * MAX_TOTAL_MARGIN_RATIO) and tp1 > entry:
+                    new_trade = {'Symbol': symbol, 'Side': 'LONG', 'Entry': entry, 'TP1': tp1, 'SL': sl, 'Qty': qty}
+                    updated_trades.append(new_trade)
+                    open_symbols.append(symbol)
+                    msg = (
+                        f"🛡️ *Global S&R Bot (1H): Confirmed LONG*\n"
+                        f"━━━━━━━━━━━━━━━━━━━\n"
+                        f"🔹 الرمز: `{symbol}` | اتجاه الـ 4H: `صاعد 📈`\n"
+                        f"📍 سعر الدخول (Entry): `{entry:.4f}`\n"
+                        f"🎯 هدف الربح (TP): `{tp1:.4f}`\n"
+                        f"🛑 وقف الخسارة (SL): `{sl:.4f}`\n"
+                        f"⚡ الرافعة المالية: `{LEVERAGE}x` | المخاطرة: `{RISK_PERCENTAGE*100}%`\n"
+                        f"💵 الرصيد الحالي: `${current_balance:.2f}`"
+                    )
+                    send_telegram_message(msg)
+                    break
+
+            elif (trend_4h == "BEARISH" and 
+                  abs(curr_price - resistance) <= (curr_atr * 1.0) and curr_price <= resistance and 
+                  is_volume_confirmed):
+
+                entry = curr_price
+                sl = resistance + (curr_atr * 1.2)
+                tp1 = support
+                risk_amount = current_balance * RISK_PERCENTAGE
+                qty = risk_amount / (sl - entry) if (sl - entry) > 0 else 1.0
+                margin = (entry * qty) / LEVERAGE
+
+                if margin <= (current_balance * MAX_TOTAL_MARGIN_RATIO) and entry > tp1:
+                    new_trade = {'Symbol': symbol, 'Side': 'SHORT', 'Entry': entry, 'TP1': tp1, 'SL': sl, 'Qty': qty}
+                    updated_trades.append(new_trade)
+                    open_symbols.append(symbol)
+                    msg = (
+                        f"🛡️ *Global S&R Bot (1H): Confirmed SHORT*\n"
+                        f"━━━━━━━━━━━━━━━━━━━\n"
+                        f"🔹 الرمز: `{symbol}` | اتجاه الـ 4H: `هابط 📉`\n"
+                        f"📍 سعر الدخول (Entry): `{entry:.4f}`\n"
+                        f"🎯 هدف الربح (TP): `{tp1:.4f}`\n"
+                        f"🛑 وقف الخسارة (SL): `{sl:.4f}`\n"
+                        f"⚡ الرافعة المالية: `{LEVERAGE}x` | المخاطرة: `{RISK_PERCENTAGE*100}%`\n"
+                        f"💵 الرصيد الحالي: `${current_balance:.2f}`"
+                    )
+                    send_telegram_message(msg)
+                    break
+
+    if updated_trades:
+        pd.DataFrame(updated_trades).to_csv(TRADE_FILE, index=False)
+    else:
+        if os.path.exists(TRADE_FILE):
+            os.remove(TRADE_FILE)
+
+    with open(BALANCE_FILE, "w") as f:
+        f.write(str(current_balance))
+
+    check_daily_report(len(updated_trades), current_balance)
+
+if __name__ == "__main__":
+    manage_and_scan_sr_market()
