@@ -5,7 +5,7 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 
-# --- إعداد نظام تسجيل الأخطاء (Error Logging) ---
+# --- إعداد نظام تسجيل الأخطاء ---
 logging.basicConfig(
     filename='bot_errors.log',
     level=logging.ERROR,
@@ -20,7 +20,7 @@ TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', "5620413191")
 INITIAL_BALANCE = 200.0     
 RISK_PERCENTAGE = 0.02     
 LEVERAGE = 3     
-MAX_TOTAL_MARGIN_RATIO = 0.6  # أقصى نسبة مسموح بها من الرصيد كإجمالي هوامش مفتوحة (60%)
+MAX_TOTAL_MARGIN_RATIO = 0.6  # أقصى نسبة مسموح بها كإجمالي هوامش (60%)
 
 # --- ملفات السجلات والأرشيف ---
 TRADE_FILE = "active_flexible_trades.csv"
@@ -79,13 +79,14 @@ def check_daily_report(active_trades_count, current_balance):
 
         roi_percent = ((current_balance - INITIAL_BALANCE) / INITIAL_BALANCE) * 100
         report_msg = (
-            f"📊 *Flexible Fast Bot: التقرير اليومي الشامل الاحترافي*\n"
+            f"📊 *Flexible Fast Bot: التقرير اليومي الشامل*\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
             f"⏰ الوقت: `{now.strftime('%Y-%m-%d %H:%M:%S')} UTC`\n"
             f"💰 الرصيد الحالي: `${current_balance:.2f}` (ROI: `{roi_percent:+.2f}%`)\n"
             f"📈 إجمالي الأرباح/الخسائر: `${total_pnl:+.2f}`\n"
             f"🎯 صفقات رابحة: `{wins}` | 🛑 صفقات خاسرة: `{losses}`\n"
             f"📂 الصفقات النشطة حالياً: `{active_trades_count} صفقات`\n"
+            f"⚡ *الرافعة المستخدمة:* `{LEVERAGE}x` | *المخاطرة لكل صفقة:* `{RISK_PERCENTAGE*100}%`\n"
             f"🚀 *الحالة:* البوت المرن السريع يقتنص الفرص على فريم الـ 15 دقيقة بكفاءة."
         )
         send_telegram_message(report_msg)
@@ -103,7 +104,7 @@ def save_closed_trade(trade_data):
     except Exception as e:
         logging.error(f"Error saving closed trade: {e}")
 
-def get_coinbase_candles(product_id, granularity=900, limit=100): # تم التعديل إلى 900 ثانية (15 دقيقة) للسرعة
+def get_coinbase_candles(product_id, granularity=900, limit=100):
     url = f"https://api.exchange.coinbase.com/products/{product_id}/candles?granularity={granularity}"
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
@@ -162,7 +163,7 @@ def manage_and_scan_flexible_market():
         except Exception:
             pass
 
-    # 1. إدارة الصفقات المفتوحة (LONG & SHORT) مع Trailing Stop الأوتوماتيكي
+    # 1. إدارة الصفقات المفتوحة (LONG & SHORT) مع Trailing Stop وإرسال التاصيل الشاملة
     active_trades = []
     if os.path.exists(TRADE_FILE):
         try:
@@ -191,43 +192,98 @@ def manage_and_scan_flexible_market():
         if side == "LONG":
             if curr_price >= (entry + (tp1 - entry) * 0.5) and sl < entry:
                 trade['SL'] = entry
-                send_telegram_message(f"🔄 *Flexible Fast Trailing Stop Activated! (LONG {symbol})*\nStop Loss moved to Entry Price.")
+                msg = (
+                    f"🔄 *Flexible Fast Trailing Stop Activated! (LONG {symbol})*\n"
+                    f"━━━━━━━━━━━━━━━━━━━\n"
+                    f"🔹 السعر الحالي: `{curr_price:.4f}` | سعر الدخول: `{entry:.4f}`\n"
+                    f"🛡️ تم نقل وقف الخسارة إلى سعر الدخول للحماية.\n"
+                    f"⚡ الرافعة: `{LEVERAGE}x` | 🎯 الهدف (TP): `{tp1:.4f}`"
+                )
+                send_telegram_message(msg)
 
             if curr_price >= tp1:
                 profit = (tp1 - entry) * qty
+                profit_percent = ((tp1 - entry) / entry) * 100 * LEVERAGE
                 current_balance += profit
-                send_telegram_message(f"🎯 *Flexible Fast TP Reached! (LONG {symbol})*\nProfit: `+${profit:.2f}`\nBalance: `${current_balance:.2f}`")
+                msg = (
+                    f"🎯 *Flexible Fast TP Reached! (LONG {symbol})*\n"
+                    f"━━━━━━━━━━━━━━━━━━━\n"
+                    f"🔹 سعر الدخول: `{entry:.4f}` | سعر الإغلاق: `{tp1:.4f}`\n"
+                    f"🛑 وقف الخسارة السابق: `{sl:.4f}`\n"
+                    f"⚡ الرافعة المالية: `{LEVERAGE}x`\n"
+                    f"💰 الربح المحقق: `+${profit:.2f}` (`+{profit_percent:.2f}%`)\n"
+                    f"💵 الرصيد الإجمالي الجديد: `${current_balance:.2f}`"
+                )
+                send_telegram_message(msg)
                 save_closed_trade({'Timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), 'Symbol': symbol, 'Side': side, 'Entry': entry, 'Exit': tp1, 'Result': 'WIN', 'PnL': round(profit, 2)})
                 closed = True
             elif curr_price <= sl:
                 loss = (entry - sl) * qty
+                loss_percent = ((entry - sl) / entry) * 100 * LEVERAGE
                 current_balance -= loss
-                send_telegram_message(f"🛑 *Flexible Fast Stop Loss Hit! (LONG {symbol})*\nLoss: `-${loss:.2f}`\nBalance: `${current_balance:.2f}`")
+                msg = (
+                    f"🛑 *Flexible Fast Stop Loss Hit! (LONG {symbol})*\n"
+                    f"━━━━━━━━━━━━━━━━━━━\n"
+                    f"🔹 سعر الدخول: `{entry:.4f}` | سعر الإغلاق: `{sl:.4f}`\n"
+                    f"🎯 الهدف المقابل: `{tp1:.4f}`\n"
+                    f"⚡ الرافعة المالية: `{LEVERAGE}x`\n"
+                    f"📉 الخسارة المحققة: `-${loss:.2f}` (`-{loss_percent:.2f}%`)\n"
+                    f"💵 الرصيد الإجمالي الجديد: `${current_balance:.2f}`"
+                )
+                send_telegram_message(msg)
                 save_closed_trade({'Timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), 'Symbol': symbol, 'Side': side, 'Entry': entry, 'Exit': sl, 'Result': 'LOSS', 'PnL': round(-loss, 2)})
                 closed = True
+
         elif side == "SHORT":
             if curr_price <= (entry - (entry - tp1) * 0.5) and sl > entry:
                 trade['SL'] = entry
-                send_telegram_message(f"🔄 *Flexible Fast Trailing Stop Activated! (SHORT {symbol})*\nStop Loss moved to Entry Price.")
+                msg = (
+                    f"🔄 *Flexible Fast Trailing Stop Activated! (SHORT {symbol})*\n"
+                    f"━━━━━━━━━━━━━━━━━━━\n"
+                    f"🔹 السعر الحالي: `{curr_price:.4f}` | سعر الدخول: `{entry:.4f}`\n"
+                    f"🛡️ تم نقل وقف الخسارة إلى سعر الدخول للحماية.\n"
+                    f"⚡ الرافعة: `{LEVERAGE}x` | 🎯 الهدف (TP): `{tp1:.4f}`"
+                )
+                send_telegram_message(msg)
 
             if curr_price <= tp1:
                 profit = (entry - tp1) * qty
+                profit_percent = ((entry - tp1) / entry) * 100 * LEVERAGE
                 current_balance += profit
-                send_telegram_message(f"🎯 *Flexible Fast TP Reached! (SHORT {symbol})*\nProfit: `+${profit:.2f}`\nBalance: `${current_balance:.2f}`")
+                msg = (
+                    f"🎯 *Flexible Fast TP Reached! (SHORT {symbol})*\n"
+                    f"━━━━━━━━━━━━━━━━━━━\n"
+                    f"🔹 سعر الدخول: `{entry:.4f}` | سعر الإغلاق: `{tp1:.4f}`\n"
+                    f"🛑 وقف الخسارة السابق: `{sl:.4f}`\n"
+                    f"⚡ الرافعة المالية: `{LEVERAGE}x`\n"
+                    f"💰 الربح المحقق: `+${profit:.2f}` (`+{profit_percent:.2f}%`)\n"
+                    f"💵 الرصيد الإجمالي الجديد: `${current_balance:.2f}`"
+                )
+                send_telegram_message(msg)
                 save_closed_trade({'Timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), 'Symbol': symbol, 'Side': side, 'Entry': entry, 'Exit': tp1, 'Result': 'WIN', 'PnL': round(profit, 2)})
                 closed = True
             elif curr_price >= sl:
                 loss = (sl - entry) * qty
+                loss_percent = ((sl - entry) / entry) * 100 * LEVERAGE
                 current_balance -= loss
-                send_telegram_message(f"🛑 *Flexible Fast Stop Loss Hit! (SHORT {symbol})*\nLoss: `-${loss:.2f}`\nBalance: `${current_balance:.2f}`")
+                msg = (
+                    f"🛑 *Flexible Fast Stop Loss Hit! (SHORT {symbol})*\n"
+                    f"━━━━━━━━━━━━━━━━━━━\n"
+                    f"🔹 سعر الدخول: `{entry:.4f}` | سعر الإغلاق: `{sl:.4f}`\n"
+                    f"🎯 الهدف المقابل: `{tp1:.4f}`\n"
+                    f"⚡ الرافعة المالية: `{LEVERAGE}x`\n"
+                    f"📉 الخسارة المحققة: `-${loss:.2f}` (`-{loss_percent:.2f}%`)\n"
+                    f"💵 الرصيد الإجمالي الجديد: `${current_balance:.2f}`"
+                )
+                send_telegram_message(msg)
                 save_closed_trade({'Timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), 'Symbol': symbol, 'Side': side, 'Entry': entry, 'Exit': sl, 'Result': 'LOSS', 'PnL': round(-loss, 2)})
                 closed = True
 
         if not closed:
             updated_trades.append(trade)
 
-    # 2. فحص السوق السريع (فريم 15 دقيقة مع شروط RSI مرنة: أقل من 40 للشراء، وأعلى من 60 للبيع)
-    if len(updated_trades) < 4: # رفع السماحية حتى 4 صفقات لاقتناص فرص أكثر
+    # 2. فحص السوق وإرسال تفاصيل الإشارة الجديدة بالكامل
+    if len(updated_trades) < 4:
         for symbol, coinbase_id in COINBASE_PRODUCTS.items():
             if symbol in open_symbols:
                 continue
@@ -247,7 +303,7 @@ def manage_and_scan_flexible_market():
             mid_b = df.iloc[-1]['mid_band']
             curr_atr = df.iloc[-1]['atr']
 
-            # أ. شروط صفقات الشراء السريعة (LONG) - مرونة RSI < 40 واقتراب من الحد السفلي
+            # شروط صفقات الشراء السريعة (LONG)
             if curr_price <= (lower_b * 1.005) and curr_rsi < 40:
                 entry = curr_price
                 sl = entry - (curr_atr * 1.5)
@@ -266,13 +322,20 @@ def manage_and_scan_flexible_market():
                     
                     msg = (
                         f"🚀 *Flexible Fast Bot: New LONG Signal*\n"
-                        f"🔹 Symbol: `{symbol}` | Entry: `{entry:.4f}`\n"
-                        f"🎯 TP (Mid): `{tp1:.4f}` | 🛑 SL: `{sl:.4f}` | RSI: `{curr_rsi:.1f}`"
+                        f"━━━━━━━━━━━━━━━━━━━\n"
+                        f"🔹 الرمز: `{symbol}` | نوع الصفقة: `LONG`\n"
+                        f"📍 سعر الدخول (Entry): `{entry:.4f}`\n"
+                        f"🎯 هدف الربح (TP): `{tp1:.4f}`\n"
+                        f"🛑 وقف الخسارة (SL): `{sl:.4f}`\n"
+                        f"⚡ الرافعة المالية: `{LEVERAGE}x`\n"
+                        f"🛡️ المخاطرة المحسوبة: `${risk_amount:.2f}` (`{RISK_PERCENTAGE*100}%`)\n"
+                        f"📊 مؤشر RSI: `{curr_rsi:.1f}` | الهامش المستقطع: `${margin:.2f}`\n"
+                        f"💵 الرصيد الحالي: `${current_balance:.2f}`"
                     )
                     send_telegram_message(msg)
                     break
 
-            # ب. شروط صفقات البيع السريعة (SHORT) - مرونة RSI > 60 واقتراب من الحد العلوي
+            # شروط صفقات البيع السريعة (SHORT)
             elif curr_price >= (upper_b * 0.995) and curr_rsi > 60:
                 entry = curr_price
                 sl = entry + (curr_atr * 1.5)
@@ -291,8 +354,15 @@ def manage_and_scan_flexible_market():
                     
                     msg = (
                         f"📉 *Flexible Fast Bot: New SHORT Signal*\n"
-                        f"🔹 Symbol: `{symbol}` | Entry: `{entry:.4f}`\n"
-                        f"🎯 TP (Mid): `{tp1:.4f}` | 🛑 SL: `{sl:.4f}` | RSI: `{curr_rsi:.1f}`"
+                        f"━━━━━━━━━━━━━━━━━━━\n"
+                        f"🔹 الرمز: `{symbol}` | نوع الصفقة: `SHORT`\n"
+                        f"📍 سعر الدخول (Entry): `{entry:.4f}`\n"
+                        f"🎯 هدف الربح (TP): `{tp1:.4f}`\n"
+                        f"🛑 وقف الخسارة (SL): `{sl:.4f}`\n"
+                        f"⚡ الرافعة المالية: `{LEVERAGE}x`\n"
+                        f"🛡️ المخاطرة المحسوبة: `${risk_amount:.2f}` (`{RISK_PERCENTAGE*100}%`)\n"
+                        f"📊 مؤشر RSI: `{curr_rsi:.1f}` | الهامش المستقطع: `${margin:.2f}`\n"
+                        f"💵 الرصيد الحالي: `${current_balance:.2f}`"
                     )
                     send_telegram_message(msg)
                     break
