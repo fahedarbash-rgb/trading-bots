@@ -1,4 +1,4 @@
-Name: Run Trading Bots
+name: Run Trading Bots
 
 on:
   schedule:
@@ -8,8 +8,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    
-    # --- مهم جداً لضمان صلاحية التعديل والرفع للمستودع ---
+
     permissions:
       contents: write
 
@@ -47,12 +46,10 @@ jobs:
       run: |
         python balanced_bot.py
 
-    # --- 1. تشغيل البوت الشامل الجديد ---
     - name: Run Global S&R Scanner Bot
       run: |
         python trading_bot_global.py
 
-    # --- 2. تحديث أمر الرفع ليشمل ملفات البوت الشامل أيضاً ---
     - name: Commit and push updated balances and trades
       run: |
         git config --global user.name "github-actions[bot]"
@@ -60,7 +57,6 @@ jobs:
         git fetch origin main
         git reset --soft origin/main || true
         
-        # أضفنا هنا: active_global_trades.csv و global_balance.txt و closed_global_trades_history.csv
         git add active_flexible_trades.csv active_strict_trades.csv active_balanced_trades.csv active_global_trades.csv flexible_balance.txt strict_balance.txt balanced_balance.txt global_balance.txt closed_global_trades_history.csv 2>/dev/null || true
         
         git diff --staged --quiet || git commit -m "Update all bots states and trades automatically"
