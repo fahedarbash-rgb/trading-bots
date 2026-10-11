@@ -1,8 +1,8 @@
-name: Run Trading Bots
+Name: Run Trading Bots
 
 on:
   schedule:
-    - cron: '0 */3 * * *'
+    - cron: '*/15 * * * *'
   workflow_dispatch:
 
 jobs:
@@ -47,7 +47,7 @@ jobs:
       run: |
         python balanced_bot.py
 
-    # --- 1. إضافة تشغيل البوت الشامل الجديد ---
+    # --- 1. تشغيل البوت الشامل الجديد ---
     - name: Run Global S&R Scanner Bot
       run: |
         python trading_bot_global.py
