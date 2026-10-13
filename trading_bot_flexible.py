@@ -12,7 +12,7 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 
-# مفاتيح التيليجرام للبوت المرن
+# مفاتيح التيليجرام للبوت المرن (مضمنة افتراضياً)
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', "8678840548:AAFgx9th4C4lz-T3ThVwTEHr2uN-WOBmozo")
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', "5620413191")
 
@@ -87,7 +87,7 @@ def check_daily_report(active_trades_count, current_balance):
             f"🎯 صفقات رابحة: `{wins}` | 🛑 صفقات خاسرة: `{losses}`\n"
             f"📂 الصفقات النشطة حالياً: `{active_trades_count} صفقات`\n"
             f"⚡ *الرافعة المستخدمة:* `{LEVERAGE}x` | *المخاطرة لكل صفقة:* `{RISK_PERCENTAGE*100}%`\n"
-            f"🚀 *الحالة:* البوت المرن السريع يقتنص الفرص على فريم الـ 15 دقيقة بكفاءة."
+            f"🚀 *الحالة:* البوت المرن السريع يقتنص الفرص على فريم الـ 15 دقيقة بكفاءة مع الفلاتر المحسنة."
         )
         send_telegram_message(report_msg)
         try:
@@ -140,6 +140,13 @@ def calculate_rsi(series, period=14):
     rs = gain / loss
     return 100 - (100 / (1 + rs))
 
+def calculate_stoch_rsi(series, period=14, k_period=3, d_period=3):
+    rsi = calculate_rsi(series, period)
+    stoch_rsi = (rsi - rsi.rolling(window=period).min()) / (rsi.rolling(window=period).max() - rsi.rolling(window=period).min())
+    stoch_k = stoch_rsi.rolling(window=k_period).mean() * 100
+    stoch_d = stoch_k.rolling(window=d_period).mean() * 100
+    return stoch_k, stoch_d
+
 def calculate_bollinger_bands(series, period=20, std_dev=2):
     middle = series.rolling(window=period).mean()
     std = series.rolling(window=period).std()
@@ -163,7 +170,7 @@ def manage_and_scan_flexible_market():
         except Exception:
             pass
 
-    # 1. إدارة الصفقات المفتوحة (LONG & SHORT) مع Trailing Stop وإرسال التاصيل الشاملة
+    # 1. إدارة الصفقات المفتوحة (LONG & SHORT) مع Trailing Stop وإرسال التفاصيل الشاملة
     active_trades = []
     if os.path.exists(TRADE_FILE):
         try:
@@ -282,32 +289,60 @@ def manage_and_scan_flexible_market():
         if not closed:
             updated_trades.append(trade)
 
-    # 2. فحص السوق وإرسال تفاصيل الإشارة الجديدة بالكامل
+    # 2. فحص السوق وإرسال تفاصيل الإشارة الجديدة مع الفلاتر المحسنة
     if len(updated_trades) < 4:
         for symbol, coinbase_id in COINBASE_PRODUCTS.items():
             if symbol in open_symbols:
                 continue
                 
-            df = get_coinbase_candles(coinbase_id, granularity=900, limit=50)
-            if df is None or len(df) < 30:
+            df = get_coinbase_candles(coinbase_id, granularity=900, limit=60)
+            if df is None or len(df) < 40:
                 continue
                 
             df['rsi'] = calculate_rsi(df['close'], 14)
+            df['stoch_k'], df['stoch_d'] = calculate_stoch_rsi(df['close'], 14, 3, 3)
             df['mid_band'], df['upper_band'], df['lower_band'] = calculate_bollinger_bands(df['close'], 20, 2)
             df['atr'] = calculate_atr(df, 14)
             
-            curr_price = df.iloc[-1]['close']
-            curr_rsi = df.iloc[-1]['rsi']
-            lower_b = df.iloc[-1]['lower_band']
-            upper_b = df.iloc[-1]['upper_band']
-            mid_b = df.iloc[-1]['mid_band']
-            curr_atr = df.iloc[-1]['atr']
+            curr_candle = df.iloc[-1]
+            prev_candle = df.iloc[-2]
 
-            # شروط صفقات الشراء السريعة (LONG)
-            if curr_price <= (lower_b * 1.005) and curr_rsi < 40:
+            curr_price = curr_candle['close']
+            curr_open = curr_candle['open']
+            curr_low = curr_candle['low']
+            curr_high = curr_candle['high']
+            
+            curr_rsi = curr_candle['rsi']
+            curr_stoch_k = curr_candle['stoch_k']
+            curr_stoch_d = curr_candle['stoch_d']
+            prev_stoch_k = prev_candle['stoch_k']
+            prev_stoch_d = prev_candle['stoch_d']
+
+            lower_b = curr_candle['lower_band']
+            upper_b = curr_candle['upper_band']
+            mid_b = curr_candle['mid_band']
+            curr_atr = curr_candle['atr']
+
+            # قياس أذيال الشموع
+            body_size = abs(curr_price - curr_open)
+            lower_wick = min(curr_open, curr_price) - curr_low
+            upper_wick = curr_high - max(curr_open, curr_price)
+
+            # شروط التأكيد (Rejection / Reversal Candle)
+            is_bullish_reversal = (curr_price > curr_open) or (lower_wick >= body_size and lower_wick > 0)
+            is_bearish_reversal = (curr_price < curr_open) or (upper_wick >= body_size and upper_wick > 0)
+
+            # تقاطعات Stochastic RSI
+            stoch_golden_cross = (prev_stoch_k <= prev_stoch_d) and (curr_stoch_k > curr_stoch_d) and (curr_stoch_k < 35)
+            stoch_death_cross = (prev_stoch_k >= prev_stoch_d) and (curr_stoch_k < curr_stoch_d) and (curr_stoch_k > 65)
+
+            # --- شروط صفقات الشراء السريعة (LONG) ---
+            if (curr_price <= lower_b * 1.008) and (curr_rsi < 45) and is_bullish_reversal and stoch_golden_cross:
                 entry = curr_price
                 sl = entry - (curr_atr * 1.5)
-                tp1 = mid_b
+                calculated_tp = max(mid_b, entry + (entry - sl) * 1.5)
+                tp1 = calculated_tp
+
                 risk_amount = current_balance * RISK_PERCENTAGE
                 qty = risk_amount / (entry - sl) if (entry - sl) > 0 else 1.0
                 margin = (entry * qty) / LEVERAGE
@@ -321,7 +356,7 @@ def manage_and_scan_flexible_market():
                     open_symbols.append(symbol)
                     
                     msg = (
-                        f"🚀 *Flexible Fast Bot: New LONG Signal*\n"
+                        f"🚀 *Flexible Fast Bot: New LONG Signal (Filtered)*\n"
                         f"━━━━━━━━━━━━━━━━━━━\n"
                         f"🔹 الرمز: `{symbol}` | نوع الصفقة: `LONG`\n"
                         f"📍 سعر الدخول (Entry): `{entry:.4f}`\n"
@@ -329,17 +364,19 @@ def manage_and_scan_flexible_market():
                         f"🛑 وقف الخسارة (SL): `{sl:.4f}`\n"
                         f"⚡ الرافعة المالية: `{LEVERAGE}x`\n"
                         f"🛡️ المخاطرة المحسوبة: `${risk_amount:.2f}` (`{RISK_PERCENTAGE*100}%`)\n"
-                        f"📊 مؤشر RSI: `{curr_rsi:.1f}` | الهامش المستقطع: `${margin:.2f}`\n"
-                        f"💵 الرصيد الحالي: `${current_balance:.2f}`"
+                        f"📊 مؤشر RSI: `{curr_rsi:.1f}` | Stoch K/D: `{curr_stoch_k:.1f}/{curr_stoch_d:.1f}`\n"
+                        f"💵 الهامش المستقطع: `${margin:.2f}` | الرصيد: `${current_balance:.2f}`"
                     )
                     send_telegram_message(msg)
                     break
 
-            # شروط صفقات البيع السريعة (SHORT)
-            elif curr_price >= (upper_b * 0.995) and curr_rsi > 60:
+            # --- شروط صفقات البيع السريعة (SHORT) ---
+            elif (curr_price >= upper_b * 0.992) and (curr_rsi > 55) and is_bearish_reversal and stoch_death_cross:
                 entry = curr_price
                 sl = entry + (curr_atr * 1.5)
-                tp1 = mid_b
+                calculated_tp = min(mid_b, entry - (sl - entry) * 1.5)
+                tp1 = calculated_tp
+
                 risk_amount = current_balance * RISK_PERCENTAGE
                 qty = risk_amount / (sl - entry) if (sl - entry) > 0 else 1.0
                 margin = (entry * qty) / LEVERAGE
@@ -353,7 +390,7 @@ def manage_and_scan_flexible_market():
                     open_symbols.append(symbol)
                     
                     msg = (
-                        f"📉 *Flexible Fast Bot: New SHORT Signal*\n"
+                        f"📉 *Flexible Fast Bot: New SHORT Signal (Filtered)*\n"
                         f"━━━━━━━━━━━━━━━━━━━\n"
                         f"🔹 الرمز: `{symbol}` | نوع الصفقة: `SHORT`\n"
                         f"📍 سعر الدخول (Entry): `{entry:.4f}`\n"
@@ -361,8 +398,8 @@ def manage_and_scan_flexible_market():
                         f"🛑 وقف الخسارة (SL): `{sl:.4f}`\n"
                         f"⚡ الرافعة المالية: `{LEVERAGE}x`\n"
                         f"🛡️ المخاطرة المحسوبة: `${risk_amount:.2f}` (`{RISK_PERCENTAGE*100}%`)\n"
-                        f"📊 مؤشر RSI: `{curr_rsi:.1f}` | الهامش المستقطع: `${margin:.2f}`\n"
-                        f"💵 الرصيد الحالي: `${current_balance:.2f}`"
+                        f"📊 مؤشر RSI: `{curr_rsi:.1f}` | Stoch K/D: `{curr_stoch_k:.1f}/{curr_stoch_d:.1f}`\n"
+                        f"💵 الهامش المستقطع: `${margin:.2f}` | الرصيد: `${current_balance:.2f}`"
                     )
                     send_telegram_message(msg)
                     break
