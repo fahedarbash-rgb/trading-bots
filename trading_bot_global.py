@@ -70,7 +70,7 @@ def check_daily_report(active_trades_count, current_balance):
 
         roi_percent = ((current_balance - INITIAL_BALANCE) / INITIAL_BALANCE) * 100
         report_msg = (
-            f"📊 *Global S&R Bot (Active): التقرير اليومي الشامل*\n"
+            f"📊 *Global S&R Bot (Fixed R:R): التقرير اليومي الشامل*\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
             f"⏰ الوقت: `{now.strftime('%Y-%m-%d %H:%M:%S')} UTC`\n"
             f"💰 الرصيد الحالي: `${current_balance:.2f}` (ROI: `{roi_percent:+.2f}%`)\n"
@@ -78,7 +78,7 @@ def check_daily_report(active_trades_count, current_balance):
             f"🎯 صفقات رابحة: `{wins}` | 🛑 صفقات خاسرة: `{losses}`\n"
             f"📂 الصفقات النشطة حالياً: `{active_trades_count} صفقات`\n"
             f"⚡ *الرافعة المستخدمة:* `{LEVERAGE}x` | *المخاطرة لكل صفقة:* `{RISK_PERCENTAGE*100}%`\n"
-            f"🛡️ *الحالة:* بوت الدعم والمقاومة يعمل بنطاق مرن لاقتناص الفرص."
+            f"🛡️ *الحالة:* بوت الدعم والمقاومة يعمل بنسبة ربح لمخاطرة ثابتة (2.5x)."
         )
         send_telegram_message(report_msg)
         try:
@@ -213,14 +213,17 @@ def manage_and_scan_sr_market():
 
             is_volume_ok = curr_volume >= (avg_volume * 0.6)
 
-            # تفعيل مرن للشراء عند الدعم (نطاق اقتراب أوسع 1.5 ATR)
+            # صفقة شراء (LONG) مع نسبة ربح ثابتة 2.5x لمسافة وقف الخسارة
             if abs(curr_price - support) <= (curr_atr * 1.5) and is_volume_ok:
                 entry = curr_price
                 sl = support - (curr_atr * 1.2)
-                tp1 = resistance if resistance > entry else entry + (curr_atr * 2.5)
                 
+                # فرض نسبة 2.5x كعائد ثابت ومضمون مقارنة بالوقف
+                risk_distance = entry - sl
+                tp1 = entry + (risk_distance * 2.5)
+
                 risk_amount = current_balance * RISK_PERCENTAGE
-                qty = risk_amount / (entry - sl) if (entry - sl) > 0 else 1.0
+                qty = risk_amount / risk_distance if risk_distance > 0 else 1.0
                 margin = (entry * qty) / LEVERAGE
 
                 if margin <= (current_balance * MAX_TOTAL_MARGIN_RATIO) and tp1 > entry:
@@ -228,24 +231,27 @@ def manage_and_scan_sr_market():
                     updated_trades.append(new_trade)
                     open_symbols.append(symbol)
                     msg = (
-                        f"🛡️ *Global S&R Bot: Flexible LONG Signal*\n"
+                        f"🛡️ *Global S&R Bot: LONG Signal (Fixed 2.5x R:R)*\n"
                         f"━━━━━━━━━━━━━━━━━━━\n"
-                        f"🔹 الرمز: `{symbol}` | الدعم المكتشف: `{support:.4f}`\n"
-                        f"📍 سعر الدخول: `{entry:.4f}` | هدف الربح: `{tp1:.4f}`\n"
-                        f"🛑 وقف الخسارة: `{sl:.4f}` | الرافعة: `{LEVERAGE}x`\n"
+                        f"🔹 الرمز: `{symbol}` | الدعم: `{support:.4f}`\n"
+                        f"📍 الدخول: `{entry:.4f}` | الهدف (TP): `{tp1:.4f}`\n"
+                        f"🛑 الوقف (SL): `{sl:.4f}` | الرافعة: `{LEVERAGE}x`\n"
                         f"💵 الرصيد الحالي: `${current_balance:.2f}`"
                     )
                     send_telegram_message(msg)
                     break
 
-            # تفعيل مرن للبيع عند المقاومة (نطاق اقتراب أوسع 1.5 ATR)
+            # صفقة بيع (SHORT) مع نسبة ربح ثابتة 2.5x لمسافة وقف الخسارة
             elif abs(curr_price - resistance) <= (curr_atr * 1.5) and is_volume_ok:
                 entry = curr_price
                 sl = resistance + (curr_atr * 1.2)
-                tp1 = support if support < entry else entry - (curr_atr * 2.5)
                 
+                # فرض نسبة 2.5x كعائد ثابت ومضمون مقارنة بالوقف
+                risk_distance = sl - entry
+                tp1 = entry - (risk_distance * 2.5)
+
                 risk_amount = current_balance * RISK_PERCENTAGE
-                qty = risk_amount / (sl - entry) if (sl - entry) > 0 else 1.0
+                qty = risk_amount / risk_distance if risk_distance > 0 else 1.0
                 margin = (entry * qty) / LEVERAGE
 
                 if margin <= (current_balance * MAX_TOTAL_MARGIN_RATIO) and entry > tp1:
@@ -253,11 +259,11 @@ def manage_and_scan_sr_market():
                     updated_trades.append(new_trade)
                     open_symbols.append(symbol)
                     msg = (
-                        f"🛡️ *Global S&R Bot: Flexible SHORT Signal*\n"
+                        f"🛡️ *Global S&R Bot: SHORT Signal (Fixed 2.5x R:R)*\n"
                         f"━━━━━━━━━━━━━━━━━━━\n"
-                        f"🔹 الرمز: `{symbol}` | المقاومة المكتشفة: `{resistance:.4f}`\n"
-                        f"📍 سعر الدخول: `{entry:.4f}` | هدف الربح: `{tp1:.4f}`\n"
-                        f"🛑 وقف الخسارة: `{sl:.4f}` | الرافعة: `{LEVERAGE}x`\n"
+                        f"🔹 الرمز: `{symbol}` | المقاومة: `{resistance:.4f}`\n"
+                        f"📍 الدخول: `{entry:.4f}` | الهدف (TP): `{tp1:.4f}`\n"
+                        f"🛑 الوقف (SL): `{sl:.4f}` | الرافعة: `{LEVERAGE}x`\n"
                         f"💵 الرصيد الحالي: `${current_balance:.2f}`"
                     )
                     send_telegram_message(msg)
