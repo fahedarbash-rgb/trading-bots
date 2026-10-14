@@ -79,7 +79,7 @@ def check_daily_report(active_trades_count, current_balance):
 
         roi_percent = ((current_balance - INITIAL_BALANCE) / INITIAL_BALANCE) * 100
         report_msg = (
-            f"📊 *Flexible Fast Bot: التقرير اليومي الشامل*\n"
+            f"📊 *Flexible Fast Bot (Trend Optimized): التقرير اليومي الشامل*\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
             f"⏰ الوقت: `{now.strftime('%Y-%m-%d %H:%M:%S')} UTC`\n"
             f"💰 الرصيد الحالي: `${current_balance:.2f}` (ROI: `{roi_percent:+.2f}%`)\n"
@@ -87,7 +87,7 @@ def check_daily_report(active_trades_count, current_balance):
             f"🎯 صفقات رابحة: `{wins}` | 🛑 صفقات خاسرة: `{losses}`\n"
             f"📂 الصفقات النشطة حالياً: `{active_trades_count} صفقات`\n"
             f"⚡ *الرافعة المستخدمة:* `{LEVERAGE}x` | *المخاطرة لكل صفقة:* `{RISK_PERCENTAGE*100}%`\n"
-            f"🚀 *الحالة:* البوت المرن السريع يقتنص الفرص بفلاتر الزخم وحجم التداول المحسنة."
+            f"🚀 *الحالة:* البوت المرن يقتنص موجات الهبوط والصعود بمرونة تامة مع الاتجاه."
         )
         send_telegram_message(report_msg)
         try:
@@ -199,97 +199,43 @@ def manage_and_scan_flexible_market():
         if side == "LONG":
             if curr_price >= (entry + (tp1 - entry) * 0.5) and sl < entry:
                 trade['SL'] = entry
-                msg = (
-                    f"🔄 *Flexible Fast Trailing Stop Activated! (LONG {symbol})*\n"
-                    f"━━━━━━━━━━━━━━━━━━━\n"
-                    f"🔹 السعر الحالي: `{curr_price:.4f}` | سعر الدخول: `{entry:.4f}`\n"
-                    f"🛡️ تم نقل وقف الخسارة إلى سعر الدخول للحماية.\n"
-                    f"⚡ الرافعة: `{LEVERAGE}x` | 🎯 الهدف (TP): `{tp1:.4f}`"
-                )
-                send_telegram_message(msg)
+                send_telegram_message(f"🔄 *Flexible Trailing Stop (LONG {symbol})* - SL moved to entry.")
 
             if curr_price >= tp1:
                 profit = (tp1 - entry) * qty
-                profit_percent = ((tp1 - entry) / entry) * 100 * LEVERAGE
                 current_balance += profit
-                msg = (
-                    f"🎯 *Flexible Fast TP Reached! (LONG {symbol})*\n"
-                    f"━━━━━━━━━━━━━━━━━━━\n"
-                    f"🔹 سعر الدخول: `{entry:.4f}` | سعر الإغلاق: `{tp1:.4f}`\n"
-                    f"🛑 وقف الخسارة السابق: `{sl:.4f}`\n"
-                    f"⚡ الرافعة المالية: `{LEVERAGE}x`\n"
-                    f"💰 الربح المحقق: `+${profit:.2f}` (`+{profit_percent:.2f}%`)\n"
-                    f"💵 الرصيد الإجمالي الجديد: `${current_balance:.2f}`"
-                )
-                send_telegram_message(msg)
+                send_telegram_message(f"🎯 *Flexible TP Reached! (LONG {symbol})* - Profit: `+${profit:.2f}`")
                 save_closed_trade({'Timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), 'Symbol': symbol, 'Side': side, 'Entry': entry, 'Exit': tp1, 'Result': 'WIN', 'PnL': round(profit, 2)})
                 closed = True
             elif curr_price <= sl:
                 loss = (entry - sl) * qty
-                loss_percent = ((entry - sl) / entry) * 100 * LEVERAGE
                 current_balance -= loss
-                msg = (
-                    f"🛑 *Flexible Fast Stop Loss Hit! (LONG {symbol})*\n"
-                    f"━━━━━━━━━━━━━━━━━━━\n"
-                    f"🔹 سعر الدخول: `{entry:.4f}` | سعر الإغلاق: `{sl:.4f}`\n"
-                    f"🎯 الهدف المقابل: `{tp1:.4f}`\n"
-                    f"⚡ الرافعة المالية: `{LEVERAGE}x`\n"
-                    f"📉 الخسارة المحققة: `-${loss:.2f}` (`-{loss_percent:.2f}%`)\n"
-                    f"💵 الرصيد الإجمالي الجديد: `${current_balance:.2f}`"
-                )
-                send_telegram_message(msg)
+                send_telegram_message(f"🛑 *Flexible Stop Loss Hit! (LONG {symbol})* - Loss: `-${loss:.2f}`")
                 save_closed_trade({'Timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), 'Symbol': symbol, 'Side': side, 'Entry': entry, 'Exit': sl, 'Result': 'LOSS', 'PnL': round(-loss, 2)})
                 closed = True
 
         elif side == "SHORT":
             if curr_price <= (entry - (entry - tp1) * 0.5) and sl > entry:
                 trade['SL'] = entry
-                msg = (
-                    f"🔄 *Flexible Fast Trailing Stop Activated! (SHORT {symbol})*\n"
-                    f"━━━━━━━━━━━━━━━━━━━\n"
-                    f"🔹 السعر الحالي: `{curr_price:.4f}` | سعر الدخول: `{entry:.4f}`\n"
-                    f"🛡️ تم نقل وقف الخسارة إلى سعر الدخول للحماية.\n"
-                    f"⚡ الرافعة: `{LEVERAGE}x` | 🎯 الهدف (TP): `{tp1:.4f}`"
-                )
-                send_telegram_message(msg)
+                send_telegram_message(f"🔄 *Flexible Trailing Stop (SHORT {symbol})* - SL moved to entry.")
 
             if curr_price <= tp1:
                 profit = (entry - tp1) * qty
-                profit_percent = ((entry - tp1) / entry) * 100 * LEVERAGE
                 current_balance += profit
-                msg = (
-                    f"🎯 *Flexible Fast TP Reached! (SHORT {symbol})*\n"
-                    f"━━━━━━━━━━━━━━━━━━━\n"
-                    f"🔹 سعر الدخول: `{entry:.4f}` | سعر الإغلاق: `{tp1:.4f}`\n"
-                    f"🛑 وقف الخسارة السابق: `{sl:.4f}`\n"
-                    f"⚡ الرافعة المالية: `{LEVERAGE}x`\n"
-                    f"💰 الربح المحقق: `+${profit:.2f}` (`+{profit_percent:.2f}%`)\n"
-                    f"💵 الرصيد الإجمالي الجديد: `${current_balance:.2f}`"
-                )
-                send_telegram_message(msg)
+                send_telegram_message(f"🎯 *Flexible TP Reached! (SHORT {symbol})* - Profit: `+${profit:.2f}`")
                 save_closed_trade({'Timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), 'Symbol': symbol, 'Side': side, 'Entry': entry, 'Exit': tp1, 'Result': 'WIN', 'PnL': round(profit, 2)})
                 closed = True
             elif curr_price >= sl:
                 loss = (sl - entry) * qty
-                loss_percent = ((sl - entry) / entry) * 100 * LEVERAGE
                 current_balance -= loss
-                msg = (
-                    f"🛑 *Flexible Fast Stop Loss Hit! (SHORT {symbol})*\n"
-                    f"━━━━━━━━━━━━━━━━━━━\n"
-                    f"🔹 سعر الدخول: `{entry:.4f}` | سعر الإغلاق: `{sl:.4f}`\n"
-                    f"🎯 الهدف المقابل: `{tp1:.4f}`\n"
-                    f"⚡ الرافعة المالية: `{LEVERAGE}x`\n"
-                    f"📉 الخسارة المحققة: `-${loss:.2f}` (`-{loss_percent:.2f}%`)\n"
-                    f"💵 الرصيد الإجمالي الجديد: `${current_balance:.2f}`"
-                )
-                send_telegram_message(msg)
+                send_telegram_message(f"🛑 *Flexible Stop Loss Hit! (SHORT {symbol})* - Loss: `-${loss:.2f}`")
                 save_closed_trade({'Timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), 'Symbol': symbol, 'Side': side, 'Entry': entry, 'Exit': sl, 'Result': 'LOSS', 'PnL': round(-loss, 2)})
                 closed = True
 
         if not closed:
             updated_trades.append(trade)
 
-    # 2. فحص السوق مع فلاتر حجم التداول (Volume) وزيادة نسبة العائد للمخاطرة (1.5x إلى 2x)
+    # 2. فحص السوق مع إعطاء الأولوية للـ SHORT في حال كان الاتجاه هابطاً
     if len(updated_trades) < 4:
         for symbol, coinbase_id in COINBASE_PRODUCTS.items():
             if symbol in open_symbols:
@@ -303,7 +249,8 @@ def manage_and_scan_flexible_market():
             df['stoch_k'], df['stoch_d'] = calculate_stoch_rsi(df['close'], 14, 3, 3)
             df['mid_band'], df['upper_band'], df['lower_band'] = calculate_bollinger_bands(df['close'], 20, 2)
             df['atr'] = calculate_atr(df, 14)
-            df['volume_ma'] = df['volume'].rolling(window=20).mean() # متوسط حجم التداول
+            df['ema50'] = df['close'].ewm(span=50, adjust=False).mean()
+            df['volume_ma'] = df['volume'].rolling(window=20).mean()
             
             curr_candle = df.iloc[-1]
             prev_candle = df.iloc[-2]
@@ -325,27 +272,56 @@ def manage_and_scan_flexible_market():
             upper_b = curr_candle['upper_band']
             mid_b = curr_candle['mid_band']
             curr_atr = curr_candle['atr']
+            ema50 = curr_candle['ema50']
 
-            # قياس أذيال الشموع
             body_size = abs(curr_price - curr_open)
             lower_wick = min(curr_open, curr_price) - curr_low
             upper_wick = curr_high - max(curr_open, curr_price)
 
-            # شروط التأكيد والزخم
             is_bullish_reversal = (curr_price > curr_open) or (lower_wick >= body_size and lower_wick > 0)
             is_bearish_reversal = (curr_price < curr_open) or (upper_wick >= body_size and upper_wick > 0)
 
             stoch_golden_cross = (prev_stoch_k <= prev_stoch_d) and (curr_stoch_k > curr_stoch_d) and (curr_stoch_k < 35)
             stoch_death_cross = (prev_stoch_k >= prev_stoch_d) and (curr_stoch_k < curr_stoch_d) and (curr_stoch_k > 65)
 
-            # فلتر حجم التداول: يجب أن تكون السيولة أعلى من المتوسط أو قوية
-            has_good_volume = curr_volume >= (vol_ma * 0.8)
+            has_good_volume = curr_volume >= (vol_ma * 0.7) # تخفيف طفيف لفوليوم الدخول لاقتناص الفرص
 
-            # --- شروط صفقات الشراء السريعة (LONG) مع نسبة ربح مضاعفة 2x ---
-            if (curr_price <= lower_b * 1.008) and (curr_rsi < 45) and is_bullish_reversal and stoch_golden_cross and has_good_volume:
+            # --- شروط صفقات البيع السريعة (SHORT) المسهلة لاقتناص الهبوط ---
+            # يدخل SHORT إذا كان السعر تحت EMA 50 أو أقترب من الخط الأوسط/العلوي مع زخم هابط
+            is_short_condition = (curr_price < ema50) or (curr_price >= mid_b)
+            if is_short_condition and (curr_rsi < 60) and is_bearish_reversal and (curr_volume >= vol_ma * 0.6):
+                entry = curr_price
+                sl = entry + (curr_atr * 1.5)
+                calculated_tp = min(lower_b, entry - (sl - entry) * 2.0)
+                tp1 = calculated_tp
+
+                risk_amount = current_balance * RISK_PERCENTAGE
+                qty = risk_amount / (sl - entry) if (sl - entry) > 0 else 1.0
+                margin = (entry * qty) / LEVERAGE
+
+                if margin <= (current_balance * MAX_TOTAL_MARGIN_RATIO) and entry > tp1:
+                    new_trade = {
+                        'Symbol': symbol, 'Side': 'SHORT', 'Entry': entry,
+                        'TP1': tp1, 'SL': sl, 'Qty': qty
+                    }
+                    updated_trades.append(new_trade)
+                    open_symbols.append(symbol)
+                    
+                    msg = (
+                        f"📉 *Flexible Bot: New SHORT Signal (Downtrend Capture)*\n"
+                        f"━━━━━━━━━━━━━━━━━━━\n"
+                        f"🔹 الرمز: `{symbol}` | اتجاه السعر: `هابط تحت المتوسط 📉`\n"
+                        f"📍 سعر الدخول: `{entry:.4f}` | هدف الربح (TP): `{tp1:.4f}`\n"
+                        f"🛑 وقف الخسارة (SL): `{sl:.4f}` | الرافعة: `{LEVERAGE}x`\n"
+                        f"📊 RSI: `{curr_rsi:.1f}` | الهامش: `${margin:.2f}`"
+                    )
+                    send_telegram_message(msg)
+                    break
+
+            # --- شروط صفقات الشراء السريعة (LONG) بشروط صارمة (فقط عند الصعود الحقيقي) ---
+            elif (curr_price > ema50) and (curr_price <= lower_b * 1.01) and (curr_rsi < 45) and is_bullish_reversal and stoch_golden_cross and has_good_volume:
                 entry = curr_price
                 sl = entry - (curr_atr * 1.5)
-                # زيادة الهدف ليكون ضعف مسافة الوقف (2.0x Risk-Reward) لضمان نمو الرصيد
                 calculated_tp = max(mid_b, entry + (entry - sl) * 2.0)
                 tp1 = calculated_tp
 
@@ -362,64 +338,5 @@ def manage_and_scan_flexible_market():
                     open_symbols.append(symbol)
                     
                     msg = (
-                        f"🚀 *Flexible Fast Bot: New LONG Signal (Volume & 2x R:R)*\n"
-                        f"━━━━━━━━━━━━━━━━━━━\n"
-                        f"🔹 الرمز: `{symbol}` | نوع الصفقة: `LONG`\n"
-                        f"📍 سعر الدخول (Entry): `{entry:.4f}`\n"
-                        f"🎯 هدف الربح (TP): `{tp1:.4f}`\n"
-                        f"🛑 وقف الخسارة (SL): `{sl:.4f}`\n"
-                        f"⚡ الرافعة المالية: `{LEVERAGE}x`\n"
-                        f"🛡️ المخاطرة المحسوبة: `${risk_amount:.2f}` (`{RISK_PERCENTAGE*100}%`)\n"
-                        f"📊 RSI: `{curr_rsi:.1f}` | Vol: `{curr_volume:.1f}` (MA: `{vol_ma:.1f}`)\n"
-                        f"💵 الهامش المستقطع: `${margin:.2f}` | الرصيد: `${current_balance:.2f}`"
-                    )
-                    send_telegram_message(msg)
-                    break
-
-            # --- شروط صفقات البيع السريعة (SHORT) مع نسبة ربح مضاعفة 2x ---
-            elif (curr_price >= upper_b * 0.992) and (curr_rsi > 55) and is_bearish_reversal and stoch_death_cross and has_good_volume:
-                entry = curr_price
-                sl = entry + (curr_atr * 1.5)
-                calculated_tp = min(mid_b, entry - (sl - entry) * 2.0)
-                tp1 = calculated_tp
-
-                risk_amount = current_balance * RISK_PERCENTAGE
-                qty = risk_amount / (sl - entry) if (sl - entry) > 0 else 1.0
-                margin = (entry * qty) / LEVERAGE
-
-                if margin <= (current_balance * MAX_TOTAL_MARGIN_RATIO) and entry > tp1:
-                    new_trade = {
-                        'Symbol': symbol, 'Side': 'SHORT', 'Entry': entry,
-                        'TP1': tp1, 'SL': sl, 'Qty': qty
-                    }
-                    updated_trades.append(new_trade)
-                    open_symbols.append(symbol)
-                    
-                    msg = (
-                        f"📉 *Flexible Fast Bot: New SHORT Signal (Volume & 2x R:R)*\n"
-                        f"━━━━━━━━━━━━━━━━━━━\n"
-                        f"🔹 الرمز: `{symbol}` | نوع الصفقة: `SHORT`\n"
-                        f"📍 سعر الدخول (Entry): `{entry:.4f}`\n"
-                        f"🎯 هدف الربح (TP): `{tp1:.4f}`\n"
-                        f"🛑 وقف الخسارة (SL): `{sl:.4f}`\n"
-                        f"⚡ الرافعة المالية: `{LEVERAGE}x`\n"
-                        f"🛡️ المخاطرة المحسوبة: `${risk_amount:.2f}` (`{RISK_PERCENTAGE*100}%`)\n"
-                        f"📊 RSI: `{curr_rsi:.1f}` | Vol: `{curr_volume:.1f}` (MA: `{vol_ma:.1f}`)\n"
-                        f"💵 الهامش المستقطع: `${margin:.2f}` | الرصيد: `${current_balance:.2f}`"
-                    )
-                    send_telegram_message(msg)
-                    break
-
-    if updated_trades:
-        pd.DataFrame(updated_trades).to_csv(TRADE_FILE, index=False)
-    else:
-        if os.path.exists(TRADE_FILE):
-            os.remove(TRADE_FILE)
-
-    with open(BALANCE_FILE, "w") as f:
-        f.write(str(current_balance))
-
-    check_daily_report(len(updated_trades), current_balance)
-
-if __name__ == "__main__":
-    manage_and_scan_flexible_market()
+                        f"🚀 *Flexible Bot: New LONG Signal (Strict Trend)*\n"
+                        f"━━━━━━━━
