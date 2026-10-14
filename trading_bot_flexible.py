@@ -44,12 +44,7 @@ def send_telegram_message(message):
     try:
         requests.post(url, json=payload, timeout=10)
     except Exception as e:
-        error_msg = f"Telegram Error: {e}"
-        logging.error(error_msg)
-        try:
-            requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": f"🚨 *Emergency Alert (Flexible Bot):* فشل الاتصال بتيليجرام: {e}", "parse_mode": "Markdown"}, timeout=5)
-        except:
-            pass
+        logging.error(f"Telegram Error: {e}")
 
 def check_daily_report(active_trades_count, current_balance):
     now = datetime.utcnow()
@@ -79,7 +74,7 @@ def check_daily_report(active_trades_count, current_balance):
 
         roi_percent = ((current_balance - INITIAL_BALANCE) / INITIAL_BALANCE) * 100
         report_msg = (
-            f"📊 *Flexible Fast Bot (Trend Optimized): التقرير اليومي الشامل*\n"
+            f"📊 *Flexible Bot: التقرير اليومي الشامل*\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
             f"⏰ الوقت: `{now.strftime('%Y-%m-%d %H:%M:%S')} UTC`\n"
             f"💰 الرصيد الحالي: `${current_balance:.2f}` (ROI: `{roi_percent:+.2f}%`)\n"
@@ -87,7 +82,7 @@ def check_daily_report(active_trades_count, current_balance):
             f"🎯 صفقات رابحة: `{wins}` | 🛑 صفقات خاسرة: `{losses}`\n"
             f"📂 الصفقات النشطة حالياً: `{active_trades_count} صفقات`\n"
             f"⚡ *الرافعة المستخدمة:* `{LEVERAGE}x` | *المخاطرة لكل صفقة:* `{RISK_PERCENTAGE*100}%`\n"
-            f"🚀 *الحالة:* البوت المرن يقتنص موجات الهبوط والصعود بمرونة تامة مع الاتجاه."
+            f"🚀 *الحالة:* البوت المرن يعمل بكفاءة عالية مع اتجاه السوق."
         )
         send_telegram_message(report_msg)
         try:
@@ -128,9 +123,7 @@ def get_coinbase_candles(product_id, granularity=900, limit=100):
             df = df.tail(limit).reset_index(drop=True)
         return df
     except Exception as e:
-        error_msg = f"Error fetching {product_id}: {e}"
-        logging.error(error_msg)
-        send_telegram_message(f"🚨 *Emergency Alert (Flexible Fast Bot):* فشل جلب الشموع للعملة `{product_id}` - الخطأ: {e}")
+        logging.error(f"Error fetching {product_id}: {e}")
         return None
 
 def calculate_rsi(series, period=14):
@@ -170,7 +163,6 @@ def manage_and_scan_flexible_market():
         except Exception:
             pass
 
-    # 1. إدارة الصفقات المفتوحة (LONG & SHORT) مع Trailing Stop
     active_trades = []
     if os.path.exists(TRADE_FILE):
         try:
@@ -235,7 +227,6 @@ def manage_and_scan_flexible_market():
         if not closed:
             updated_trades.append(trade)
 
-    # 2. فحص السوق مع إعطاء الأولوية للـ SHORT في حال كان الاتجاه هابطاً
     if len(updated_trades) < 4:
         for symbol, coinbase_id in COINBASE_PRODUCTS.items():
             if symbol in open_symbols:
@@ -281,15 +272,10 @@ def manage_and_scan_flexible_market():
             is_bullish_reversal = (curr_price > curr_open) or (lower_wick >= body_size and lower_wick > 0)
             is_bearish_reversal = (curr_price < curr_open) or (upper_wick >= body_size and upper_wick > 0)
 
-            stoch_golden_cross = (prev_stoch_k <= prev_stoch_d) and (curr_stoch_k > curr_stoch_d) and (curr_stoch_k < 35)
-            stoch_death_cross = (prev_stoch_k >= prev_stoch_d) and (curr_stoch_k < curr_stoch_d) and (curr_stoch_k > 65)
+            has_good_volume = curr_volume >= (vol_ma * 0.6)
 
-            has_good_volume = curr_volume >= (vol_ma * 0.7) # تخفيف طفيف لفوليوم الدخول لاقتناص الفرص
-
-            # --- شروط صفقات البيع السريعة (SHORT) المسهلة لاقتناص الهبوط ---
-            # يدخل SHORT إذا كان السعر تحت EMA 50 أو أقترب من الخط الأوسط/العلوي مع زخم هابط
             is_short_condition = (curr_price < ema50) or (curr_price >= mid_b)
-            if is_short_condition and (curr_rsi < 60) and is_bearish_reversal and (curr_volume >= vol_ma * 0.6):
+            if is_short_condition and (curr_rsi < 60) and is_bearish_reversal and has_good_volume:
                 entry = curr_price
                 sl = entry + (curr_atr * 1.5)
                 calculated_tp = min(lower_b, entry - (sl - entry) * 2.0)
@@ -308,7 +294,7 @@ def manage_and_scan_flexible_market():
                     open_symbols.append(symbol)
                     
                     msg = (
-                        f"📉 *Flexible Bot: New SHORT Signal (Downtrend Capture)*\n"
+                        f"📉 *Flexible Bot: New SHORT Signal*\n"
                         f"━━━━━━━━━━━━━━━━━━━\n"
                         f"🔹 الرمز: `{symbol}` | اتجاه السعر: `هابط تحت المتوسط 📉`\n"
                         f"📍 سعر الدخول: `{entry:.4f}` | هدف الربح (TP): `{tp1:.4f}`\n"
@@ -318,8 +304,7 @@ def manage_and_scan_flexible_market():
                     send_telegram_message(msg)
                     break
 
-            # --- شروط صفقات الشراء السريعة (LONG) بشروط صارمة (فقط عند الصعود الحقيقي) ---
-            elif (curr_price > ema50) and (curr_price <= lower_b * 1.01) and (curr_rsi < 45) and is_bullish_reversal and stoch_golden_cross and has_good_volume:
+            elif (curr_price > ema50) and (curr_price <= lower_b * 1.01) and (curr_rsi < 45) and is_bullish_reversal and has_good_volume:
                 entry = curr_price
                 sl = entry - (curr_atr * 1.5)
                 calculated_tp = max(mid_b, entry + (entry - sl) * 2.0)
@@ -338,5 +323,26 @@ def manage_and_scan_flexible_market():
                     open_symbols.append(symbol)
                     
                     msg = (
-                        f"🚀 *Flexible Bot: New LONG Signal (Strict Trend)*\n"
-                        f"━━━━━━━━
+                        f"🚀 *Flexible Bot: New LONG Signal*\n"
+                        f"━━━━━━━━━━━━━━━━━━━\n"
+                        f"🔹 الرمز: `{symbol}` | اتجاه السعر: `صاعد فوق المتوسط 📈`\n"
+                        f"📍 سعر الدخول: `{entry:.4f}` | هدف الربح (TP): `{tp1:.4f}`\n"
+                        f"🛑 وقف الخسارة (SL): `{sl:.4f}` | الرافعة: `{LEVERAGE}x`\n"
+                        f"📊 RSI: `{curr_rsi:.1f}` | الهامش: `${margin:.2f}`"
+                    )
+                    send_telegram_message(msg)
+                    break
+
+    if updated_trades:
+        pd.DataFrame(updated_trades).to_csv(TRADE_FILE, index=False)
+    else:
+        if os.path.exists(TRADE_FILE):
+            os.remove(TRADE_FILE)
+
+    with open(BALANCE_FILE, "w") as f:
+        f.write(str(current_balance))
+
+    check_daily_report(len(updated_trades), current_balance)
+
+if __name__ == "__main__":
+    manage_and_scan_flexible_market()
