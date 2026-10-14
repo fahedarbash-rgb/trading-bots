@@ -50,6 +50,10 @@ jobs:
       run: |
         python trading_bot_global.py
 
+    - name: Run Lightning Scalper Bot
+      run: |
+        python trading_bot_scalper.py
+
     - name: Commit and push updated balances and trades
       run: |
         git config --global user.name "github-actions[bot]"
@@ -57,7 +61,7 @@ jobs:
         git fetch origin main
         git reset --soft origin/main || true
         
-        git add active_flexible_trades.csv active_strict_trades.csv active_balanced_trades.csv active_global_trades.csv flexible_balance.txt strict_balance.txt balanced_balance.txt global_balance.txt closed_global_trades_history.csv closed_flexible_trades_history.csv 2>/dev/null || true
+        git add active_flexible_trades.csv active_strict_trades.csv active_balanced_trades.csv active_global_trades.csv active_scalper_trades.csv flexible_balance.txt strict_balance.txt balanced_balance.txt global_balance.txt scalper_balance.txt closed_global_trades_history.csv closed_flexible_trades_history.csv closed_scalper_trades_history.csv 2>/dev/null || true
         
-        git diff --staged --quiet || git commit -m "Update all bots states, balances, and trade history automatically"
+        git diff --staged --quiet || git commit -m "Update all 5 bots states, balances, and trade history automatically"
         git push origin main
