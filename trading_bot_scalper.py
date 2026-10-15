@@ -234,3 +234,52 @@ def manage_and_scan_scalper_market():
                     send_telegram_message(f"📉 *Lightning Scalper TP1! (SHORT {symbol})*")
                     updated_trades.append(trade)
                 else:
+                    if not closed and trade not in updated_trades:
+                        updated_trades.append(trade)
+
+    # البحث عن إشارات جديدة (فحص آخر 3 شمعات لزيادة الفرص)
+    if len(updated_trades) < 4:
+        for symbol, pionex_symbol in PIONEX_SYMBOLS.items():
+            if symbol in open_symbols:
+                continue
+                
+            df = get_pionex_candles(pionex_symbol, interval="1m", limit=60)
+            if df is None or len(df) < 30:
+                continue
+                
+            df['rsi'] = calculate_rsi(df['close'], 9)
+            df['stoch_k'], df['stoch_d'] = calculate_stoch_rsi(df['close'], 9, 3, 3)
+            df['ema9'] = df['close'].ewm(span=9, adjust=False).mean()
+            df['atr'] = calculate_atr(df, 10)
+            
+            signal_found = False
+            for i in [-1, -2, -3]:
+                if abs(i) >= len(df):
+                    continue
+                curr_candle = df.iloc[i]
+                prev_candle = df.iloc[i-1]
+
+                curr_price = curr_candle['close']
+                curr_stoch_k = curr_candle['stoch_k']
+                curr_stoch_d = curr_candle['stoch_d']
+                prev_stoch_k = prev_candle['stoch_k']
+                prev_stoch_d = prev_candle['stoch_d']
+                ema9 = curr_candle['ema9']
+                curr_atr = curr_candle['atr']
+
+                stoch_golden_cross = (prev_stoch_k <= prev_stoch_d) and (curr_stoch_k > curr_stoch_d) and (curr_stoch_k < 35)
+                stoch_death_cross = (prev_stoch_k >= prev_stoch_d) and (curr_stoch_k < curr_stoch_d) and (curr_stoch_k > 65)
+
+                # SHORT 1m
+                if (curr_price < ema9) and stoch_death_cross:
+                    entry = curr_price
+                    sl = entry + (curr_atr * 0.9)
+                    risk_dist = sl - entry
+                    
+                    tp1 = entry - (risk_dist * 1.0)
+                    tp2 = entry - (risk_dist * 1.8)
+                    tp3 = entry - (risk_dist * 2.5)
+
+                    risk_amount = current_balance * RISK_PERCENTAGE
+                    qty = risk_amount / risk_dist if risk_dist > 0 else 1.0
+                    margin = (entry * qty) / LE
