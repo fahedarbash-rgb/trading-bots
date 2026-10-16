@@ -268,7 +268,7 @@ def manage_and_scan_scalper_market():
                 curr_atr = curr_candle['atr']
 
                 stoch_golden_cross = (prev_stoch_k <= prev_stoch_d) and (curr_stoch_k > curr_stoch_d) and (curr_stoch_k < 35)
-                stoch_death_cross = (prev_stoch_k >= prev_stoch_d) and (curr_stoch_k < curr_stoch_d) and (curr_stoch_k > 65)
+                stoch_death_cross = (prev_stoch_k >= prev_stoidh) and (curr_stoch_k < curr_stoch_d) and (curr_stoch_k > 65) if 'prev_stoidh' else (prev_stoch_k >= prev_stoch_d) and (curr_stoch_k < curr_stoch_d) and (curr_stoch_k > 65)
 
                 # SHORT 1m
                 if (curr_price < ema9) and stoch_death_cross:
@@ -282,4 +282,73 @@ def manage_and_scan_scalper_market():
 
                     risk_amount = current_balance * RISK_PERCENTAGE
                     qty = risk_amount / risk_dist if risk_dist > 0 else 1.0
-                    margin = (entry * qty) / LE
+                    margin = (entry * qty) / LEVERAGE
+
+                    if margin <= (current_balance * MAX_TOTAL_MARGIN_RATIO) and entry > tp3:
+                        new_trade = {
+                            'Symbol': symbol, 'Side': 'SHORT', 'Entry': entry,
+                            'TP1': tp1, 'TP2': tp2, 'TP3': tp3, 'SL': sl, 'Qty': qty, 'HitStage': 0
+                        }
+                        updated_trades.append(new_trade)
+                        open_symbols.append(symbol)
+                        
+                        msg = (
+                            f"⚡ *Lightning Scalper: SHORT (5x)*\n"
+                            f"━━━━━━━━━━━━━━━━━━━\n"
+                            f"🔹 الرمز: `{symbol}` | الدخول: `{entry:.4f}`\n"
+                            f"🎯 TP1: `{tp1:.4f}` | TP2: `{tp2:.4f}` | TP3: `{tp3:.4f}`\n"
+                            f"🛑 SL: `{sl:.4f}`"
+                        )
+                        send_telegram_message(msg)
+                        signal_found = True
+                        break
+
+                # LONG 1m
+                elif (curr_price > ema9) and stoch_golden_cross:
+                    entry = curr_price
+                    sl = entry - (curr_atr * 0.9)
+                    risk_dist = entry - sl
+                    
+                    tp1 = entry + (risk_dist * 1.0)
+                    tp2 = entry + (risk_dist * 1.8)
+                    tp3 = entry + (risk_dist * 2.5)
+
+                    risk_amount = current_balance * RISK_PERCENTAGE
+                    qty = risk_amount / risk_dist if risk_dist > 0 else 1.0
+                    margin = (entry * qty) / LEVERAGE
+
+                    if margin <= (current_balance * MAX_TOTAL_MARGIN_RATIO) and tp3 > entry:
+                        new_trade = {
+                            'Symbol': symbol, 'Side': 'LONG', 'Entry': entry,
+                            'TP1': tp1, 'TP2': tp2, 'TP3': tp3, 'SL': sl, 'Qty': qty, 'HitStage': 0
+                        }
+                        updated_trades.append(new_trade)
+                        open_symbols.append(symbol)
+                        
+                        msg = (
+                            f"⚡ *Lightning Scalper: LONG (5x)*\n"
+                            f"━━━━━━━━━━━━━━━━━━━\n"
+                            f"🔹 الرمز: `{symbol}` | الدخول: `{entry:.4f}`\n"
+                            f"🎯 TP1: `{tp1:.4f}` | TP2: `{tp2:.4f}` | TP3: `{tp3:.4f}`\n"
+                            f"🛑 SL: `{sl:.4f}`"
+                        )
+                        send_telegram_message(msg)
+                        signal_found = True
+                        break
+            if signal_found:
+                break
+
+    if updated_trades:
+        df_out = pd.DataFrame(updated_trades).drop_duplicates(subset=['Symbol'])
+        df_out.to_csv(TRADE_FILE, index=False)
+    else:
+        if os.path.exists(TRADE_FILE):
+            os.remove(TRADE_FILE)
+
+    with open(BALANCE_FILE, "w") as f:
+        f.write(str(current_balance))
+
+    check_daily_report(len(updated_trades), current_balance)
+
+if __name__ == "__main__":
+    manage_and_scan_scalper_market()
