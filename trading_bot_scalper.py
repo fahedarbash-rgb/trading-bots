@@ -12,7 +12,7 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 
-# بيانات بوت التيليجرام الجديد الخاص بالسكالبينج
+# بيانات بوت التيليجرام الخاص بالسكالبينج
 TELEGRAM_BOT_TOKEN = "8733239782:AAFgTANZqzFSa1LF5E57_mPJIBOJIlHnou0"
 TELEGRAM_CHAT_ID = "5620413191"
 
@@ -75,7 +75,7 @@ def check_daily_report(active_trades_count, current_balance):
 
         roi_percent = ((current_balance - INITIAL_BALANCE) / INITIAL_BALANCE) * 100
         report_msg = (
-            f"⚡ *Lightning Scalper (5x - 1m): التقرير اليومي*\n"
+            f"⚡ *Lightning Scalper (5x - 1m): التقرير اليومي النشط*\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
             f"⏰ الوقت: `{now.strftime('%Y-%m-%d %H:%M:%S')} UTC`\n"
             f"💰 الرصيد الحالي: `${current_balance:.2f}` (ROI: `{roi_percent:+.2f}%`)\n"
@@ -98,7 +98,7 @@ def save_closed_trade(trade_data):
     except Exception as e:
         logging.error(f"Error saving closed trade: {e}")
 
-def get_pionex_candles(symbol, interval="1m", limit=60):
+def get_pionex_candles(symbol, interval="1m", limit=80):
     url = f"https://api.pionex.com/api/v1/market/klines?symbol={symbol}&interval={interval}&limit={limit}"
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
@@ -188,45 +188,31 @@ def manage_and_scan_scalper_market():
         if side == "LONG":
             if curr_price <= sl:
                 if sl == entry:
-                    loss = 0.0
-                    loss_percent = 0.0
-                    result_status = 'NEUTRAL'
-                    close_reason = "SL Hit at Break-Even (Protected)"
+                    loss, result_status, close_reason = 0.0, 'NEUTRAL', "SL Hit at Break-Even"
                 else:
                     loss = (entry - sl) * qty
-                    loss_percent = ((entry - sl) / entry) * 100 * LEVERAGE
-                    result_status = 'LOSS'
-                    close_reason = "SL Hit"
+                    result_status, close_reason = 'LOSS', "SL Hit"
 
                 current_balance -= loss
-                msg = (
+                send_telegram_message(
                     f"🛑 *Lightning Scalper: Stop Loss Hit! (LONG {symbol})*\n"
                     f"━━━━━━━━━━━━━━━━━━━\n"
-                    f"🔹 سعر الدخول: `{entry:.4f}` | سعر الإغلاق: `{sl:.4f}`\n"
-                    f"📋 *سبب الإغلاق:* `{close_reason}`\n"
-                    f"⚡ الرافعة المالية: `{LEVERAGE}x`\n"
-                    f"📉 الأثر على الرصيد: `-${loss:.2f}` (`-{loss_percent:.2f}%`)\n"
-                    f"💵 الرصيد الإجمالي الجديد: `${current_balance:.2f}`"
+                    f"🔹 دخول: `{entry:.4f}` | إغلاق: `{sl:.4f}` | السبب: `{close_reason}`\n"
+                    f"💵 الرصيد الجديد: `${current_balance:.2f}`"
                 )
-                send_telegram_message(msg)
                 save_closed_trade({'Timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), 'Symbol': symbol, 'Side': side, 'Entry': entry, 'Exit': sl, 'Result': result_status, 'Reason': close_reason, 'PnL': round(-loss, 2)})
                 closed = True
             else:
                 if hit_stage < 3 and curr_price >= tp3:
                     profit = (tp3 - entry) * qty
-                    profit_percent = ((tp3 - entry) / entry) * 100 * LEVERAGE
                     current_balance += profit
-                    close_reason = "TP3 Final Hit (Target Reached)"
-                    msg = (
+                    close_reason = "TP3 Final Target Reached"
+                    send_telegram_message(
                         f"🎉 *Lightning Scalper: TP3 Final Hit! (LONG {symbol})*\n"
                         f"━━━━━━━━━━━━━━━━━━━\n"
-                        f"🔹 سعر الدخول: `{entry:.4f}` | سعر الإغلاق: `{tp3:.4f}`\n"
-                        f"📋 *سبب الإغلاق:* `{close_reason}`\n"
-                        f"⚡ الرافعة المالية: `{LEVERAGE}x`\n"
-                        f"💰 الربح المحقق: `+${profit:.2f}` (`+{profit_percent:.2f}%`)\n"
-                        f"💵 الرصيد الإجمالي الجديد: `${current_balance:.2f}`"
+                        f"🔹 دخول: `{entry:.4f}` | إغلاق: `{tp3:.4f}` | ربح: `+${profit:.2f}`\n"
+                        f"💵 الرصيد الجديد: `${current_balance:.2f}`"
                     )
-                    send_telegram_message(msg)
                     save_closed_trade({'Timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), 'Symbol': symbol, 'Side': side, 'Entry': entry, 'Exit': tp3, 'Result': 'WIN', 'Reason': close_reason, 'PnL': round(profit, 2)})
                     closed = True
                 elif hit_stage < 2 and curr_price >= tp2:
@@ -245,45 +231,31 @@ def manage_and_scan_scalper_market():
         elif side == "SHORT":
             if curr_price >= sl:
                 if sl == entry:
-                    loss = 0.0
-                    loss_percent = 0.0
-                    result_status = 'NEUTRAL'
-                    close_reason = "SL Hit at Break-Even (Protected)"
+                    loss, result_status, close_reason = 0.0, 'NEUTRAL', "SL Hit at Break-Even"
                 else:
                     loss = (sl - entry) * qty
-                    loss_percent = ((sl - entry) / entry) * 100 * LEVERAGE
-                    result_status = 'LOSS'
-                    close_reason = "SL Hit"
+                    result_status, close_reason = 'LOSS', "SL Hit"
 
                 current_balance -= loss
-                msg = (
+                send_telegram_message(
                     f"🛑 *Lightning Scalper: Stop Loss Hit! (SHORT {symbol})*\n"
                     f"━━━━━━━━━━━━━━━━━━━\n"
-                    f"🔹 سعر الدخول: `{entry:.4f}` | سعر الإغلاق: `{sl:.4f}`\n"
-                    f"📋 *سبب الإغلاق:* `{close_reason}`\n"
-                    f"⚡ الرافعة المالية: `{LEVERAGE}x`\n"
-                    f"📉 الأثر على الرصيد: `-${loss:.2f}` (`-{loss_percent:.2f}%`)\n"
-                    f"💵 الرصيد الإجمالي الجديد: `${current_balance:.2f}`"
+                    f"🔹 دخول: `{entry:.4f}` | إغلاق: `{sl:.4f}` | السبب: `{close_reason}`\n"
+                    f"💵 الرصيد الجديد: `${current_balance:.2f}`"
                 )
-                send_telegram_message(msg)
                 save_closed_trade({'Timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), 'Symbol': symbol, 'Side': side, 'Entry': entry, 'Exit': sl, 'Result': result_status, 'Reason': close_reason, 'PnL': round(-loss, 2)})
                 closed = True
             else:
                 if hit_stage < 3 and curr_price <= tp3:
                     profit = (entry - tp3) * qty
-                    profit_percent = ((entry - tp3) / entry) * 100 * LEVERAGE
                     current_balance += profit
-                    close_reason = "TP3 Final Hit (Target Reached)"
-                    msg = (
+                    close_reason = "TP3 Final Target Reached"
+                    send_telegram_message(
                         f"🎉 *Lightning Scalper: TP3 Final Hit! (SHORT {symbol})*\n"
                         f"━━━━━━━━━━━━━━━━━━━\n"
-                        f"🔹 سعر الدخول: `{entry:.4f}` | سعر الإغلاق: `{tp3:.4f}`\n"
-                        f"📋 *سبب الإغلاق:* `{close_reason}`\n"
-                        f"⚡ الرافعة المالية: `{LEVERAGE}x`\n"
-                        f"💰 الربح المحقق: `+${profit:.2f}` (`+{profit_percent:.2f}%`)\n"
-                        f"💵 الرصيد الإجمالي الجديد: `${current_balance:.2f}`"
+                        f"🔹 دخول: `{entry:.4f}` | إغلاق: `{tp3:.4f}` | ربح: `+${profit:.2f}`\n"
+                        f"💵 الرصيد الجديد: `${current_balance:.2f}`"
                     )
-                    send_telegram_message(msg)
                     save_closed_trade({'Timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), 'Symbol': symbol, 'Side': side, 'Entry': entry, 'Exit': tp3, 'Result': 'WIN', 'Reason': close_reason, 'PnL': round(profit, 2)})
                     closed = True
                 elif hit_stage < 2 and curr_price <= tp2:
@@ -299,13 +271,13 @@ def manage_and_scan_scalper_market():
                     if not closed and trade not in updated_trades:
                         updated_trades.append(trade)
 
-    # البحث عن إشارات جديدة (فحص آخر 3 شمعات لزيادة الفرص)
-    if len(updated_trades) < 4:
+    # البحث عن إشارات جديدة بمرونة وفحص دقيق لآخر 5 شمعات
+    if len(updated_trades) < 5:
         for symbol, pionex_symbol in PIONEX_SYMBOLS.items():
             if symbol in open_symbols:
                 continue
                 
-            df = get_pionex_candles(pionex_symbol, interval="1m", limit=60)
+            df = get_pionex_candles(pionex_symbol, interval="1m", limit=80)
             if df is None or len(df) < 30:
                 continue
                 
@@ -315,7 +287,7 @@ def manage_and_scan_scalper_market():
             df['atr'] = calculate_atr(df, 10)
             
             signal_found = False
-            for i in [-1, -2, -3]:
+            for i in [-1, -2, -3, -4, -5]:
                 if abs(i) >= len(df):
                     continue
                 curr_candle = df.iloc[i]
@@ -329,18 +301,18 @@ def manage_and_scan_scalper_market():
                 ema9 = curr_candle['ema9']
                 curr_atr = curr_candle['atr']
 
-                stoch_golden_cross = (prev_stoch_k <= prev_stoch_d) and (curr_stoch_k > curr_stoch_d) and (curr_stoch_k < 35)
-                stoch_death_cross = (prev_stoch_k >= prev_stoch_d) and (curr_stoch_k < curr_stoch_d) and (curr_stoch_k > 65)
+                stoch_golden_cross = (prev_stoch_k <= prev_stoch_d) and (curr_stoch_k > curr_stoch_d) and (curr_stoch_k < 45)
+                stoch_death_cross = (prev_stoch_k >= prev_stoch_d) and (curr_stoch_k < curr_stoch_d) and (curr_stoch_k > 55)
 
                 # SHORT 1m
                 if (curr_price < ema9) and stoch_death_cross:
                     entry = curr_price
-                    sl = entry + (curr_atr * 0.9)
+                    sl = entry + (curr_atr * 1.0)
                     risk_dist = sl - entry
                     
-                    tp1 = entry - (risk_dist * 1.0)
-                    tp2 = entry - (risk_dist * 1.8)
-                    tp3 = entry - (risk_dist * 2.5)
+                    tp1 = entry - (risk_dist * 0.9)
+                    tp2 = entry - (risk_dist * 1.6)
+                    tp3 = entry - (risk_dist * 2.4)
 
                     risk_amount = current_balance * RISK_PERCENTAGE
                     qty = risk_amount / risk_dist if risk_dist > 0 else 1.0
@@ -354,26 +326,25 @@ def manage_and_scan_scalper_market():
                         updated_trades.append(new_trade)
                         open_symbols.append(symbol)
                         
-                        msg = (
-                            f"⚡ *Lightning Scalper: SHORT (5x)*\n"
+                        send_telegram_message(
+                            f"⚡ *Lightning Scalper: SHORT Signal (5x)*\n"
                             f"━━━━━━━━━━━━━━━━━━━\n"
                             f"🔹 الرمز: `{symbol}` | الدخول: `{entry:.4f}`\n"
                             f"🎯 TP1: `{tp1:.4f}` | TP2: `{tp2:.4f}` | TP3: `{tp3:.4f}`\n"
                             f"🛑 SL: `{sl:.4f}`"
                         )
-                        send_telegram_message(msg)
                         signal_found = True
                         break
 
                 # LONG 1m
                 elif (curr_price > ema9) and stoch_golden_cross:
                     entry = curr_price
-                    sl = entry - (curr_atr * 0.9)
+                    sl = entry - (curr_atr * 1.0)
                     risk_dist = entry - sl
                     
-                    tp1 = entry + (risk_dist * 1.0)
-                    tp2 = entry + (risk_dist * 1.8)
-                    tp3 = entry + (risk_dist * 2.5)
+                    tp1 = entry + (risk_dist * 0.9)
+                    tp2 = entry + (risk_dist * 1.6)
+                    tp3 = entry + (risk_dist * 2.4)
 
                     risk_amount = current_balance * RISK_PERCENTAGE
                     qty = risk_amount / risk_dist if risk_dist > 0 else 1.0
@@ -387,14 +358,13 @@ def manage_and_scan_scalper_market():
                         updated_trades.append(new_trade)
                         open_symbols.append(symbol)
                         
-                        msg = (
-                            f"⚡ *Lightning Scalper: LONG (5x)*\n"
+                        send_telegram_message(
+                            f"⚡ *Lightning Scalper: LONG Signal (5x)*\n"
                             f"━━━━━━━━━━━━━━━━━━━\n"
                             f"🔹 الرمز: `{symbol}` | الدخول: `{entry:.4f}`\n"
                             f"🎯 TP1: `{tp1:.4f}` | TP2: `{tp2:.4f}` | TP3: `{tp3:.4f}`\n"
                             f"🛑 SL: `{sl:.4f}`"
                         )
-                        send_telegram_message(msg)
                         signal_found = True
                         break
             if signal_found:
