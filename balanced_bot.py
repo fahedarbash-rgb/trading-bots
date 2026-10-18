@@ -161,10 +161,9 @@ def manage_and_scan_market():
         close_reason = ""
 
         if side == "LONG":
-            # 1. تحقق من الهدف الأول TP1
             if not tp1_hit and curr_price >= tp1:
                 trade['TP1_Hit'] = True
-                trade['SL'] = entry  # نقل وقف الخسارة إلى سعر الدخول لحماية أصل رأس المال
+                trade['SL'] = entry  
                 msg = (
                     f"🎯 *Balanced Bot: TP1 Reached! (LONG {symbol})*\n"
                     f"━━━━━━━━━━━━━━━━━━━\n"
@@ -174,7 +173,6 @@ def manage_and_scan_market():
                 )
                 send_telegram_message(msg)
 
-            # 2. تحقق من الهدف الثاني الكامل TP2
             if curr_price >= tp2:
                 profit = (tp2 - entry) * qty
                 profit_percent = ((tp2 - entry) / entry) * 100 * LEVERAGE
@@ -193,7 +191,6 @@ def manage_and_scan_market():
                 save_closed_trade({'Timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), 'Symbol': symbol, 'Side': side, 'Entry': entry, 'Exit': tp2, 'Result': 'WIN', 'Reason': close_reason, 'PnL': round(profit, 2)})
                 closed = True
 
-            # 3. تحقق من ضرب وقف الخسارة SL
             elif curr_price <= sl:
                 if sl == entry:
                     loss = 0.0
@@ -221,10 +218,9 @@ def manage_and_scan_market():
                 closed = True
 
         elif side == "SHORT":
-            # 1. تحقق من الهدف الأول TP1
             if not tp1_hit and curr_price <= tp1:
                 trade['TP1_Hit'] = True
-                trade['SL'] = entry  # نقل وقف الخسارة إلى سعر الدخول
+                trade['SL'] = entry  
                 msg = (
                     f"🎯 *Balanced Bot: TP1 Reached! (SHORT {symbol})*\n"
                     f"━━━━━━━━━━━━━━━━━━━\n"
@@ -234,7 +230,6 @@ def manage_and_scan_market():
                 )
                 send_telegram_message(msg)
 
-            # 2. تحقق من الهدف الثاني الكامل TP2
             if curr_price <= tp2:
                 profit = (entry - tp2) * qty
                 profit_percent = ((entry - tp2) / entry) * 100 * LEVERAGE
@@ -253,7 +248,6 @@ def manage_and_scan_market():
                 save_closed_trade({'Timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), 'Symbol': symbol, 'Side': side, 'Entry': entry, 'Exit': tp2, 'Result': 'WIN', 'Reason': close_reason, 'PnL': round(profit, 2)})
                 closed = True
 
-            # 3. تحقق من ضرب وقف الخسارة SL
             elif curr_price >= sl:
                 if sl == entry:
                     loss = 0.0
@@ -341,3 +335,31 @@ def manage_and_scan_market():
                     new_trade = {'Symbol': symbol, 'Side': 'SHORT', 'Entry': entry, 'TP1': tp1, 'TP2': tp2, 'SL': sl, 'Qty': qty, 'TP1_Hit': False}
                     updated_trades.append(new_trade)
                     open_symbols.append(symbol)
+                    msg = (
+                        f"🚀 *Balanced Bot (30m): New SHORT Signal*\n"
+                        f"━━━━━━━━━━━━━━━━━━━\n"
+                        f"🔹 الرمز: `{symbol}` | نوع الصفقة: `SHORT`\n"
+                        f"📍 سعر الدخول (Entry): `{entry:.4f}`\n"
+                        f"🎯 الهدف الأول (TP1): `{tp1:.4f}`\n"
+                        f"🎯 الهدف الثاني (TP2): `{tp2:.4f}`\n"
+                        f"🛑 وقف الخسارة (SL): `{sl:.4f}`\n"
+                        f"⚡ الرافعة المالية: `{LEVERAGE}x` | المخاطرة: `{RISK_PERCENTAGE*100}%`\n"
+                        f"💵 الرصيد الحالي: `${current_balance:.2f}`"
+                    )
+                    send_telegram_message(msg)
+                    break
+
+    # حفظ الملفات بانتظام في النهاية
+    if updated_trades:
+        pd.DataFrame(updated_trades).to_csv(TRADE_FILE, index=False)
+    else:
+        if os.path.exists(TRADE_FILE):
+            os.remove(TRADE_FILE)
+
+    with open(BALANCE_FILE, "w") as f:
+        f.write(str(current_balance))
+
+    check_daily_report(len(updated_trades), current_balance)
+
+if __name__ == "__main__":
+    manage_and_scan_market()
