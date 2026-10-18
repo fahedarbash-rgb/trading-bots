@@ -142,7 +142,7 @@ def manage_and_scan_strict_market():
     updated_trades = []
     open_symbols = [t['Symbol'] for t in active_trades]
 
-    # 1. إدارة الصفقات المفتوحة مع Trailing Stop آلي والأهداف
+    # 1. إدارة الصفقات المفتوحة مع الأهداف الدقيقة (TP1, TP2, SL) وتحديد سبب الإغلاق
     for trade in active_trades:
         symbol = trade['Symbol']
         df = get_coinbase_candles(COINBASE_PRODUCTS.get(symbol, "BTC-USD"), granularity=3600, limit=5)
@@ -153,47 +153,132 @@ def manage_and_scan_strict_market():
         curr_price = df.iloc[-1]['close']
         entry_price = trade['Entry']
         tp1 = trade['TP1']
+        # دعم التوافق مع الصفقات القديمة إذا لم تكن تحتوي على TP2
+        tp2 = trade.get('TP2', entry_price + (tp1 - entry_price) * 1.4 if trade.get('Side', 'LONG') == 'LONG' else entry_price - (entry_price - tp1) * 1.4)
         sl = trade['SL']
         qty = trade['Qty']
         side = trade.get('Side', 'LONG')
+        tp1_hit = trade.get('TP1_Hit', False)
 
         closed = False
-        if side == "LONG":
-            # Trailing Stop آلي: نقل SL لنقطة الدخول عند بلوغ 50% من الهدف الأول
-            if curr_price >= (entry_price + (tp1 - entry_price) * 0.5) and sl < entry_price:
-                trade['SL'] = entry_price
-                send_telegram_message(f"🔄 *Strict Trailing Stop Activated! (LONG {symbol})*\nStop Loss moved to Entry Price.")
+        close_reason = ""
 
-            if curr_price >= tp1:
-                profit = (tp1 - entry_price) * qty
+        if side == "LONG":
+            # 1. تحقق من بلوغ الهدف الأول TP1 ونقل وقف الخسارة لسعر الدخول
+            if not tp1_hit and curr_price >= tp1:
+                trade['TP1_Hit'] = True
+                trade['SL'] = entry_price
+                send_telegram_message(
+                    f"🎯 *Strict Bot: TP1 Reached! (LONG {symbol})*\n"
+                    f"━━━━━━━━━━━━━━━━━━━\n"
+                    f"🔹 سعر الدخول: `{entry_price:.4f}` | السعر الحالي: `{curr_price:.4f}`\n"
+                    f"🎯 Target 1: `{tp1:.4f}` | 🎯 Target 2: `{tp2:.4f}`\n"
+                    f"🛡️ *حماية:* تم نقل وقف الخسارة (SL) إلى سعر الدخول `{entry_price:.4f}`."
+                )
+
+            # 2. تحقق من الوصول للهدف النهائي TP2
+            if curr_price >= tp2:
+                profit = (tp2 - entry_price) * qty
+                profit_percent = ((tp2 - entry_price) / entry_price) * 100 * LEVERAGE
                 current_balance += profit
-                send_telegram_message(f"🎯 *Strict TP Reached! (LONG {symbol})*\nProfit: `+${profit:.2f}`\nBalance: `${current_balance:.2f}`")
-                save_closed_trade({'Timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), 'Symbol': symbol, 'Side': side, 'Entry': entry_price, 'Exit': tp1, 'Result': 'WIN', 'PnL': round(profit, 2)})
+                close_reason = "TP2 Hit (Final Target)"
+                msg = (
+                    f"🎉 *Strict Bot: TP2 Final Hit! (LONG {symbol})*\n"
+                    f"━━━━━━━━━━━━━━━━━━━\n"
+                    f"🔹 سعر الدخول: `{entry_price:.4f}` | سعر الإغلاق: `{tp2:.4f}`\n"
+                    f"📋 *سبب الإغلاق:* `{close_reason}`\n"
+                    f"⚡ الرافعة المالية: `{LEVERAGE}x`\n"
+                    f"💰 الربح المحقق: `+${profit:.2f}` (`+{profit_percent:.2f}%`)\n"
+                    f"💵 الرصيد الإجمالي الجديد: `${current_balance:.2f}`"
+                )
+                send_telegram_message(msg)
+                save_closed_trade({'Timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), 'Symbol': symbol, 'Side': side, 'Entry': entry_price, 'Exit': tp2, 'Result': 'WIN', 'Reason': close_reason, 'PnL': round(profit, 2)})
                 closed = True
+
+            # 3. تحقق من ضرب وقف الخسارة SL
             elif curr_price <= sl:
-                loss = (entry_price - sl) * qty
+                if sl == entry_price:
+                    loss = 0.0
+                    loss_percent = 0.0
+                    result_status = 'NEUTRAL'
+                    close_reason = "SL Hit at Break-Even (Protected)"
+                else:
+                    loss = (entry_price - sl) * qty
+                    loss_percent = ((entry_price - sl) / entry_price) * 100 * LEVERAGE
+                    result_status = 'LOSS'
+                    close_reason = "SL Hit"
+
                 current_balance -= loss
-                send_telegram_message(f"🛑 *Strict Stop Loss Hit! (LONG {symbol})*\nLoss: `-${loss:.2f}`\nBalance: `${current_balance:.2f}`")
-                save_closed_trade({'Timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), 'Symbol': symbol, 'Side': side, 'Entry': entry_price, 'Exit': sl, 'Result': 'LOSS', 'PnL': round(-loss, 2)})
+                msg = (
+                    f"🛑 *Strict Bot: Stop Loss Hit! (LONG {symbol})*\n"
+                    f"━━━━━━━━━━━━━━━━━━━\n"
+                    f"🔹 سعر الدخول: `{entry_price:.4f}` | سعر الإغلاق: `{sl:.4f}`\n"
+                    f"📋 *سبب الإغلاق:* `{close_reason}`\n"
+                    f"⚡ الرافعة المالية: `{LEVERAGE}x`\n"
+                    f"📉 الأثر على الرصيد: `-${loss:.2f}` (`-{loss_percent:.2f}%`)\n"
+                    f"💵 الرصيد الإجمالي الجديد: `${current_balance:.2f}`"
+                )
+                send_telegram_message(msg)
+                save_closed_trade({'Timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), 'Symbol': symbol, 'Side': side, 'Entry': entry_price, 'Exit': sl, 'Result': result_status, 'Reason': close_reason, 'PnL': round(-loss, 2)})
                 closed = True
 
         elif side == "SHORT":
-            # Trailing Stop آلي لصفقات البيع
-            if curr_price <= (entry_price - (entry_price - tp1) * 0.5) and sl > entry_price:
+            # 1. تحقق من بلوغ الهدف الأول TP1 ونقل وقف الخسارة لسعر الدخول
+            if not tp1_hit and curr_price <= tp1:
+                trade['TP1_Hit'] = True
                 trade['SL'] = entry_price
-                send_telegram_message(f"🔄 *Strict Trailing Stop Activated! (SHORT {symbol})*\nStop Loss moved to Entry Price.")
+                send_telegram_message(
+                    f"🎯 *Strict Bot: TP1 Reached! (SHORT {symbol})*\n"
+                    f"━━━━━━━━━━━━━━━━━━━\n"
+                    f"🔹 سعر الدخول: `{entry_price:.4f}` | السعر الحالي: `{curr_price:.4f}`\n"
+                    f"🎯 Target 1: `{tp1:.4f}` | 🎯 Target 2: `{tp2:.4f}`\n"
+                    f"🛡️ *حماية:* تم نقل وقف الخسارة (SL) إلى سعر الدخول `{entry_price:.4f}`."
+                )
 
-            if curr_price <= tp1:
-                profit = (entry_price - tp1) * qty
+            # 2. تحقق من الوصول للهدف النهائي TP2
+            if curr_price <= tp2:
+                profit = (entry_price - tp2) * qty
+                profit_percent = ((entry_price - tp2) / entry_price) * 100 * LEVERAGE
                 current_balance += profit
-                send_telegram_message(f"🎯 *Strict TP Reached! (SHORT {symbol})*\nProfit: `+${profit:.2f}`\nBalance: `${current_balance:.2f}`")
-                save_closed_trade({'Timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), 'Symbol': symbol, 'Side': side, 'Entry': entry_price, 'Exit': tp1, 'Result': 'WIN', 'PnL': round(profit, 2)})
+                close_reason = "TP2 Hit (Final Target)"
+                msg = (
+                    f"🎉 *Strict Bot: TP2 Final Hit! (SHORT {symbol})*\n"
+                    f"━━━━━━━━━━━━━━━━━━━\n"
+                    f"🔹 سعر الدخول: `{entry_price:.4f}` | سعر الإغلاق: `{tp2:.4f}`\n"
+                    f"📋 *سبب الإغلاق:* `{close_reason}`\n"
+                    f"⚡ الرافعة المالية: `{LEVERAGE}x`\n"
+                    f"💰 الربح المحقق: `+${profit:.2f}` (`+{profit_percent:.2f}%`)\n"
+                    f"💵 الرصيد الإجمالي الجديد: `${current_balance:.2f}`"
+                )
+                send_telegram_message(msg)
+                save_closed_trade({'Timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), 'Symbol': symbol, 'Side': side, 'Entry': entry_price, 'Exit': tp2, 'Result': 'WIN', 'Reason': close_reason, 'PnL': round(profit, 2)})
                 closed = True
+
+            # 3. تحقق من ضرب وقف الخسارة SL
             elif curr_price >= sl:
-                loss = (sl - entry_price) * qty
+                if sl == entry_price:
+                    loss = 0.0
+                    loss_percent = 0.0
+                    result_status = 'NEUTRAL'
+                    close_reason = "SL Hit at Break-Even (Protected)"
+                else:
+                    loss = (sl - entry_price) * qty
+                    loss_percent = ((sl - entry_price) / entry_price) * 100 * LEVERAGE
+                    result_status = 'LOSS'
+                    close_reason = "SL Hit"
+
                 current_balance -= loss
-                send_telegram_message(f"🛑 *Strict Stop Loss Hit! (SHORT {symbol})*\nLoss: `-${loss:.2f}`\nBalance: `${current_balance:.2f}`")
-                save_closed_trade({'Timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), 'Symbol': symbol, 'Side': side, 'Entry': entry_price, 'Exit': sl, 'Result': 'LOSS', 'PnL': round(-loss, 2)})
+                msg = (
+                    f"🛑 *Strict Bot: Stop Loss Hit! (SHORT {symbol})*\n"
+                    f"━━━━━━━━━━━━━━━━━━━\n"
+                    f"🔹 سعر الدخول: `{entry_price:.4f}` | سعر الإغلاق: `{sl:.4f}`\n"
+                    f"📋 *سبب الإغلاق:* `{close_reason}`\n"
+                    f"⚡ الرافعة المالية: `{LEVERAGE}x`\n"
+                    f"📉 الأثر على الرصيد: `-${loss:.2f}` (`-{loss_percent:.2f}%`)\n"
+                    f"💵 الرصيد الإجمالي الجديد: `${current_balance:.2f}`"
+                )
+                send_telegram_message(msg)
+                save_closed_trade({'Timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), 'Symbol': symbol, 'Side': side, 'Entry': entry_price, 'Exit': sl, 'Result': result_status, 'Reason': close_reason, 'PnL': round(-loss, 2)})
                 closed = True
 
         if not closed:
@@ -222,7 +307,8 @@ def manage_and_scan_strict_market():
             if curr_price > ema50 and curr_rsi < 38:
                 entry = curr_price
                 sl = entry - (curr_atr * 1.5)
-                tp1 = entry + (curr_atr * 2.5)
+                tp1 = entry + (curr_atr * 1.8)
+                tp2 = entry + (curr_atr * 3.0)
                 risk_amount = current_balance * RISK_PERCENTAGE
                 qty = risk_amount / (entry - sl) if (entry - sl) > 0 else 1.0
                 margin = (entry * qty) / LEVERAGE
@@ -230,18 +316,27 @@ def manage_and_scan_strict_market():
                 if margin <= (current_balance * MAX_TOTAL_MARGIN_RATIO) and tp1 > entry:
                     new_trade = {
                         'Symbol': symbol, 'Side': 'LONG', 'Entry': entry,
-                        'TP1': tp1, 'SL': sl, 'Qty': qty
+                        'TP1': tp1, 'TP2': tp2, 'SL': sl, 'Qty': qty, 'TP1_Hit': False
                     }
                     updated_trades.append(new_trade)
                     open_symbols.append(symbol)
-                    send_telegram_message(f"🛡️ *Strict Bot: New LONG Signal*\n🔹 Symbol: `{symbol}` | Entry: `{entry:.4f}`\n🎯 TP: `{tp1:.4f}` | 🛑 SL: `{sl:.4f}` | RSI: `{curr_rsi:.1f}`")
+                    send_telegram_message(
+                        f"🛡️ *Strict Bot: New LONG Signal*\n"
+                        f"━━━━━━━━━━━━━━━━━━━\n"
+                        f"🔹 الرمز: `{symbol}` | اتجاه الصفقة: `LONG`\n"
+                        f"📍 سعر الدخول: `{entry:.4f}`\n"
+                        f"🎯 الهدف الأول (TP1): `{tp1:.4f}`\n"
+                        f"🎯 الهدف الثاني (TP2): `{tp2:.4f}`\n"
+                        f"🛑 وقف الخسارة (SL): `{sl:.4f}` | RSI: `{curr_rsi:.1f}`"
+                    )
                     break
 
             # شروط البيع (SHORT)
             elif curr_price < ema50 and curr_rsi > 62:
                 entry = curr_price
                 sl = entry + (curr_atr * 1.5)
-                tp1 = entry - (curr_atr * 2.5)
+                tp1 = entry - (curr_atr * 1.8)
+                tp2 = entry - (curr_atr * 3.0)
                 risk_amount = current_balance * RISK_PERCENTAGE
                 qty = risk_amount / (sl - entry) if (sl - entry) > 0 else 1.0
                 margin = (entry * qty) / LEVERAGE
@@ -249,11 +344,19 @@ def manage_and_scan_strict_market():
                 if margin <= (current_balance * MAX_TOTAL_MARGIN_RATIO) and entry > tp1:
                     new_trade = {
                         'Symbol': symbol, 'Side': 'SHORT', 'Entry': entry,
-                        'TP1': tp1, 'SL': sl, 'Qty': qty
+                        'TP1': tp1, 'TP2': tp2, 'SL': sl, 'Qty': qty, 'TP1_Hit': False
                     }
                     updated_trades.append(new_trade)
                     open_symbols.append(symbol)
-                    send_telegram_message(f"🛡️ *Strict Bot: New SHORT Signal*\n🔹 Symbol: `{symbol}` | Entry: `{entry:.4f}`\n🎯 TP: `{tp1:.4f}` | 🛑 SL: `{sl:.4f}` | RSI: `{curr_rsi:.1f}`")
+                    send_telegram_message(
+                        f"🛡️ *Strict Bot: New SHORT Signal*\n"
+                        f"━━━━━━━━━━━━━━━━━━━\n"
+                        f"🔹 الرمز: `{symbol}` | اتجاه الصفقة: `SHORT`\n"
+                        f"📍 سعر الدخول: `{entry:.4f}`\n"
+                        f"🎯 الهدف الأول (TP1): `{tp1:.4f}`\n"
+                        f"🎯 الهدف الثاني (TP2): `{tp2:.4f}`\n"
+                        f"🛑 وقف الخسارة (SL): `{sl:.4f}` | RSI: `{curr_rsi:.1f}`"
+                    )
                     break
 
     if updated_trades:
