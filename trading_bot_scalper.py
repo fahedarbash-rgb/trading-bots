@@ -183,28 +183,60 @@ def manage_and_scan_scalper_market():
         hit_stage = int(trade.get('HitStage', 0))
 
         closed = False
+        close_reason = ""
+
         if side == "LONG":
             if curr_price <= sl:
-                loss = (entry - sl) * qty
+                if sl == entry:
+                    loss = 0.0
+                    loss_percent = 0.0
+                    result_status = 'NEUTRAL'
+                    close_reason = "SL Hit at Break-Even (Protected)"
+                else:
+                    loss = (entry - sl) * qty
+                    loss_percent = ((entry - sl) / entry) * 100 * LEVERAGE
+                    result_status = 'LOSS'
+                    close_reason = "SL Hit"
+
                 current_balance -= loss
-                send_telegram_message(f"🛑 *Lightning Scalper SL! (LONG {symbol})* - Loss: `-${loss:.2f}`")
-                save_closed_trade({'Timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), 'Symbol': symbol, 'Side': side, 'Entry': entry, 'Exit': sl, 'Result': 'LOSS', 'PnL': round(-loss, 2)})
+                msg = (
+                    f"🛑 *Lightning Scalper: Stop Loss Hit! (LONG {symbol})*\n"
+                    f"━━━━━━━━━━━━━━━━━━━\n"
+                    f"🔹 سعر الدخول: `{entry:.4f}` | سعر الإغلاق: `{sl:.4f}`\n"
+                    f"📋 *سبب الإغلاق:* `{close_reason}`\n"
+                    f"⚡ الرافعة المالية: `{LEVERAGE}x`\n"
+                    f"📉 الأثر على الرصيد: `-${loss:.2f}` (`-{loss_percent:.2f}%`)\n"
+                    f"💵 الرصيد الإجمالي الجديد: `${current_balance:.2f}`"
+                )
+                send_telegram_message(msg)
+                save_closed_trade({'Timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), 'Symbol': symbol, 'Side': side, 'Entry': entry, 'Exit': sl, 'Result': result_status, 'Reason': close_reason, 'PnL': round(-loss, 2)})
                 closed = True
             else:
                 if hit_stage < 3 and curr_price >= tp3:
                     profit = (tp3 - entry) * qty
+                    profit_percent = ((tp3 - entry) / entry) * 100 * LEVERAGE
                     current_balance += profit
-                    send_telegram_message(f"🎯 *Lightning Scalper TP3! (LONG {symbol})* - Profit: `+${profit:.2f}`")
-                    save_closed_trade({'Timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), 'Symbol': symbol, 'Side': side, 'Entry': entry, 'Exit': tp3, 'Result': 'WIN', 'PnL': round(profit, 2)})
+                    close_reason = "TP3 Final Hit (Target Reached)"
+                    msg = (
+                        f"🎉 *Lightning Scalper: TP3 Final Hit! (LONG {symbol})*\n"
+                        f"━━━━━━━━━━━━━━━━━━━\n"
+                        f"🔹 سعر الدخول: `{entry:.4f}` | سعر الإغلاق: `{tp3:.4f}`\n"
+                        f"📋 *سبب الإغلاق:* `{close_reason}`\n"
+                        f"⚡ الرافعة المالية: `{LEVERAGE}x`\n"
+                        f"💰 الربح المحقق: `+${profit:.2f}` (`+{profit_percent:.2f}%`)\n"
+                        f"💵 الرصيد الإجمالي الجديد: `${current_balance:.2f}`"
+                    )
+                    send_telegram_message(msg)
+                    save_closed_trade({'Timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), 'Symbol': symbol, 'Side': side, 'Entry': entry, 'Exit': tp3, 'Result': 'WIN', 'Reason': close_reason, 'PnL': round(profit, 2)})
                     closed = True
                 elif hit_stage < 2 and curr_price >= tp2:
                     trade['HitStage'] = 2
                     trade['SL'] = entry
-                    send_telegram_message(f"🚀 *Lightning Scalper TP2! (LONG {symbol})* - SL moved to Entry.")
+                    send_telegram_message(f"🚀 *Lightning Scalper TP2 Reached! (LONG {symbol})* - SL moved to Entry.")
                     updated_trades.append(trade)
                 elif hit_stage < 1 and curr_price >= tp1:
                     trade['HitStage'] = 1
-                    send_telegram_message(f"📈 *Lightning Scalper TP1! (LONG {symbol})*")
+                    send_telegram_message(f"📈 *Lightning Scalper TP1 Reached! (LONG {symbol})*")
                     updated_trades.append(trade)
                 else:
                     if not closed and trade not in updated_trades:
@@ -212,26 +244,56 @@ def manage_and_scan_scalper_market():
 
         elif side == "SHORT":
             if curr_price >= sl:
-                loss = (sl - entry) * qty
+                if sl == entry:
+                    loss = 0.0
+                    loss_percent = 0.0
+                    result_status = 'NEUTRAL'
+                    close_reason = "SL Hit at Break-Even (Protected)"
+                else:
+                    loss = (sl - entry) * qty
+                    loss_percent = ((sl - entry) / entry) * 100 * LEVERAGE
+                    result_status = 'LOSS'
+                    close_reason = "SL Hit"
+
                 current_balance -= loss
-                send_telegram_message(f"🛑 *Lightning Scalper SL! (SHORT {symbol})* - Loss: `-${loss:.2f}`")
-                save_closed_trade({'Timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), 'Symbol': symbol, 'Side': side, 'Entry': entry, 'Exit': sl, 'Result': 'LOSS', 'PnL': round(-loss, 2)})
+                msg = (
+                    f"🛑 *Lightning Scalper: Stop Loss Hit! (SHORT {symbol})*\n"
+                    f"━━━━━━━━━━━━━━━━━━━\n"
+                    f"🔹 سعر الدخول: `{entry:.4f}` | سعر الإغلاق: `{sl:.4f}`\n"
+                    f"📋 *سبب الإغلاق:* `{close_reason}`\n"
+                    f"⚡ الرافعة المالية: `{LEVERAGE}x`\n"
+                    f"📉 الأثر على الرصيد: `-${loss:.2f}` (`-{loss_percent:.2f}%`)\n"
+                    f"💵 الرصيد الإجمالي الجديد: `${current_balance:.2f}`"
+                )
+                send_telegram_message(msg)
+                save_closed_trade({'Timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), 'Symbol': symbol, 'Side': side, 'Entry': entry, 'Exit': sl, 'Result': result_status, 'Reason': close_reason, 'PnL': round(-loss, 2)})
                 closed = True
             else:
                 if hit_stage < 3 and curr_price <= tp3:
                     profit = (entry - tp3) * qty
+                    profit_percent = ((entry - tp3) / entry) * 100 * LEVERAGE
                     current_balance += profit
-                    send_telegram_message(f"🎯 *Lightning Scalper TP3! (SHORT {symbol})* - Profit: `+${profit:.2f}`")
-                    save_closed_trade({'Timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), 'Symbol': symbol, 'Side': side, 'Entry': entry, 'Exit': tp3, 'Result': 'WIN', 'PnL': round(profit, 2)})
+                    close_reason = "TP3 Final Hit (Target Reached)"
+                    msg = (
+                        f"🎉 *Lightning Scalper: TP3 Final Hit! (SHORT {symbol})*\n"
+                        f"━━━━━━━━━━━━━━━━━━━\n"
+                        f"🔹 سعر الدخول: `{entry:.4f}` | سعر الإغلاق: `{tp3:.4f}`\n"
+                        f"📋 *سبب الإغلاق:* `{close_reason}`\n"
+                        f"⚡ الرافعة المالية: `{LEVERAGE}x`\n"
+                        f"💰 الربح المحقق: `+${profit:.2f}` (`+{profit_percent:.2f}%`)\n"
+                        f"💵 الرصيد الإجمالي الجديد: `${current_balance:.2f}`"
+                    )
+                    send_telegram_message(msg)
+                    save_closed_trade({'Timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), 'Symbol': symbol, 'Side': side, 'Entry': entry, 'Exit': tp3, 'Result': 'WIN', 'Reason': close_reason, 'PnL': round(profit, 2)})
                     closed = True
                 elif hit_stage < 2 and curr_price <= tp2:
                     trade['HitStage'] = 2
                     trade['SL'] = entry
-                    send_telegram_message(f"🚀 *Lightning Scalper TP2! (SHORT {symbol})* - SL moved to Entry.")
+                    send_telegram_message(f"🚀 *Lightning Scalper TP2 Reached! (SHORT {symbol})* - SL moved to Entry.")
                     updated_trades.append(trade)
                 elif hit_stage < 1 and curr_price <= tp1:
                     trade['HitStage'] = 1
-                    send_telegram_message(f"📉 *Lightning Scalper TP1! (SHORT {symbol})*")
+                    send_telegram_message(f"📉 *Lightning Scalper TP1 Reached! (SHORT {symbol})*")
                     updated_trades.append(trade)
                 else:
                     if not closed and trade not in updated_trades:
@@ -268,7 +330,7 @@ def manage_and_scan_scalper_market():
                 curr_atr = curr_candle['atr']
 
                 stoch_golden_cross = (prev_stoch_k <= prev_stoch_d) and (curr_stoch_k > curr_stoch_d) and (curr_stoch_k < 35)
-                stoch_death_cross = (prev_stoch_k >= prev_stoidh) and (curr_stoch_k < curr_stoch_d) and (curr_stoch_k > 65) if 'prev_stoidh' else (prev_stoch_k >= prev_stoch_d) and (curr_stoch_k < curr_stoch_d) and (curr_stoch_k > 65)
+                stoch_death_cross = (prev_stoch_k >= prev_stoch_d) and (curr_stoch_k < curr_stoch_d) and (curr_stoch_k > 65)
 
                 # SHORT 1m
                 if (curr_price < ema9) and stoch_death_cross:
