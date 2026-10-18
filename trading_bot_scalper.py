@@ -22,7 +22,6 @@ LEVERAGE = 5     # رافعة مالية 5x تناسب السكالبينج ال
 MAX_TOTAL_MARGIN_RATIO = 0.6  
 
 TRADE_FILE = "active_scalper_trades.csv"
-BALANCE_FILE = "scalper_balance.txt"
 CLOSED_FILE = "closed_scalper_trades_history.csv"
 HEARTBEAT_FILE = "last_scalper_heartbeat.txt"
 
@@ -145,13 +144,15 @@ def calculate_atr(df, period=10):
     return tr.rolling(window=period).mean()
 
 def manage_and_scan_scalper_market():
+    # حساب الرصيد التلقائي والتراكمي من ملف الأرشيف المغلق لضمان دقته وثباته
     current_balance = INITIAL_BALANCE
-    if os.path.exists(BALANCE_FILE):
+    if os.path.exists(CLOSED_FILE):
         try:
-            with open(BALANCE_FILE, "r") as f:
-                current_balance = float(f.read().strip())
-        except Exception:
-            pass
+            df_closed = pd.read_csv(CLOSED_FILE)
+            if not df_closed.empty and 'PnL' in df_closed.columns:
+                current_balance = INITIAL_BALANCE + df_closed['PnL'].sum()
+        except Exception as e:
+            logging.error(f"Error reading closed history for scalper balance: {e}")
 
     active_trades = []
     if os.path.exists(TRADE_FILE):
@@ -193,25 +194,22 @@ def manage_and_scan_scalper_market():
                     loss = (entry - sl) * qty
                     result_status, close_reason = 'LOSS', "SL Hit"
 
-                current_balance -= loss
                 send_telegram_message(
                     f"🛑 *Lightning Scalper: Stop Loss Hit! (LONG {symbol})*\n"
                     f"━━━━━━━━━━━━━━━━━━━\n"
                     f"🔹 دخول: `{entry:.4f}` | إغلاق: `{sl:.4f}` | السبب: `{close_reason}`\n"
-                    f"💵 الرصيد الجديد: `${current_balance:.2f}`"
+                    f"📉 الأثر: `-${loss:.2f}`"
                 )
                 save_closed_trade({'Timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), 'Symbol': symbol, 'Side': side, 'Entry': entry, 'Exit': sl, 'Result': result_status, 'Reason': close_reason, 'PnL': round(-loss, 2)})
                 closed = True
             else:
                 if hit_stage < 3 and curr_price >= tp3:
                     profit = (tp3 - entry) * qty
-                    current_balance += profit
                     close_reason = "TP3 Final Target Reached"
                     send_telegram_message(
                         f"🎉 *Lightning Scalper: TP3 Final Hit! (LONG {symbol})*\n"
                         f"━━━━━━━━━━━━━━━━━━━\n"
-                        f"🔹 دخول: `{entry:.4f}` | إغلاق: `{tp3:.4f}` | ربح: `+${profit:.2f}`\n"
-                        f"💵 الرصيد الجديد: `${current_balance:.2f}`"
+                        f"🔹 دخول: `{entry:.4f}` | إغلاق: `{tp3:.4f}` | ربح: `+${profit:.2f}`"
                     )
                     save_closed_trade({'Timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), 'Symbol': symbol, 'Side': side, 'Entry': entry, 'Exit': tp3, 'Result': 'WIN', 'Reason': close_reason, 'PnL': round(profit, 2)})
                     closed = True
@@ -236,25 +234,22 @@ def manage_and_scan_scalper_market():
                     loss = (sl - entry) * qty
                     result_status, close_reason = 'LOSS', "SL Hit"
 
-                current_balance -= loss
                 send_telegram_message(
                     f"🛑 *Lightning Scalper: Stop Loss Hit! (SHORT {symbol})*\n"
                     f"━━━━━━━━━━━━━━━━━━━\n"
                     f"🔹 دخول: `{entry:.4f}` | إغلاق: `{sl:.4f}` | السبب: `{close_reason}`\n"
-                    f"💵 الرصيد الجديد: `${current_balance:.2f}`"
+                    f"📉 الأثر: `-${loss:.2f}`"
                 )
                 save_closed_trade({'Timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), 'Symbol': symbol, 'Side': side, 'Entry': entry, 'Exit': sl, 'Result': result_status, 'Reason': close_reason, 'PnL': round(-loss, 2)})
                 closed = True
             else:
                 if hit_stage < 3 and curr_price <= tp3:
                     profit = (entry - tp3) * qty
-                    current_balance += profit
                     close_reason = "TP3 Final Target Reached"
                     send_telegram_message(
                         f"🎉 *Lightning Scalper: TP3 Final Hit! (SHORT {symbol})*\n"
                         f"━━━━━━━━━━━━━━━━━━━\n"
-                        f"🔹 دخول: `{entry:.4f}` | إغلاق: `{tp3:.4f}` | ربح: `+${profit:.2f}`\n"
-                        f"💵 الرصيد الجديد: `${current_balance:.2f}`"
+                        f"🔹 دخول: `{entry:.4f}` | إغلاق: `{tp3:.4f}` | ربح: `+${profit:.2f}`"
                     )
                     save_closed_trade({'Timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), 'Symbol': symbol, 'Side': side, 'Entry': entry, 'Exit': tp3, 'Result': 'WIN', 'Reason': close_reason, 'PnL': round(profit, 2)})
                     closed = True
@@ -270,6 +265,15 @@ def manage_and_scan_scalper_market():
                 else:
                     if not closed and trade not in updated_trades:
                         updated_trades.append(trade)
+
+    # إعادة حساب الرصيد مباشرة من الأرشيف المحدث بعد معالجة الصفقات المغلقة
+    if os.path.exists(CLOSED_FILE):
+        try:
+            df_closed = pd.read_csv(CLOSED_FILE)
+            if not df_closed.empty and 'PnL' in df_closed.columns:
+                current_balance = INITIAL_BALANCE + df_closed['PnL'].sum()
+        except Exception as e:
+            logging.error(f"Error recalculating balance after trade close: {e}")
 
     # البحث عن إشارات جديدة بمرونة وفحص دقيق لآخر 5 شمعات
     if len(updated_trades) < 5:
@@ -331,7 +335,8 @@ def manage_and_scan_scalper_market():
                             f"━━━━━━━━━━━━━━━━━━━\n"
                             f"🔹 الرمز: `{symbol}` | الدخول: `{entry:.4f}`\n"
                             f"🎯 TP1: `{tp1:.4f}` | TP2: `{tp2:.4f}` | TP3: `{tp3:.4f}`\n"
-                            f"🛑 SL: `{sl:.4f}`"
+                            f"🛑 SL: `{sl:.4f}`\n"
+                            f"💵 الرصيد الحالي: `${current_balance:.2f}`"
                         )
                         signal_found = True
                         break
@@ -363,7 +368,8 @@ def manage_and_scan_scalper_market():
                             f"━━━━━━━━━━━━━━━━━━━\n"
                             f"🔹 الرمز: `{symbol}` | الدخول: `{entry:.4f}`\n"
                             f"🎯 TP1: `{tp1:.4f}` | TP2: `{tp2:.4f}` | TP3: `{tp3:.4f}`\n"
-                            f"🛑 SL: `{sl:.4f}`"
+                            f"🛑 SL: `{sl:.4f}`\n"
+                            f"💵 الرصيد الحالي: `${current_balance:.2f}`"
                         )
                         signal_found = True
                         break
@@ -376,9 +382,6 @@ def manage_and_scan_scalper_market():
     else:
         if os.path.exists(TRADE_FILE):
             os.remove(TRADE_FILE)
-
-    with open(BALANCE_FILE, "w") as f:
-        f.write(str(current_balance))
 
     check_daily_report(len(updated_trades), current_balance)
 
