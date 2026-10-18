@@ -144,7 +144,6 @@ def calculate_atr(df, period=10):
     return tr.rolling(window=period).mean()
 
 def manage_and_scan_scalper_market():
-    # حساب الرصيد التلقائي والتراكمي من ملف الأرشيف المغلق لضمان دقته وثباته
     current_balance = INITIAL_BALANCE
     if os.path.exists(CLOSED_FILE):
         try:
@@ -266,7 +265,6 @@ def manage_and_scan_scalper_market():
                     if not closed and trade not in updated_trades:
                         updated_trades.append(trade)
 
-    # إعادة حساب الرصيد مباشرة من الأرشيف المحدث بعد معالجة الصفقات المغلقة
     if os.path.exists(CLOSED_FILE):
         try:
             df_closed = pd.read_csv(CLOSED_FILE)
@@ -275,7 +273,7 @@ def manage_and_scan_scalper_market():
         except Exception as e:
             logging.error(f"Error recalculating balance after trade close: {e}")
 
-    # البحث عن إشارات جديدة بمرونة وفحص دقيق لآخر 5 شمعات
+    # --- البحث عن صفقات جديدة بمرونة عالية تناسب فريم الدقيقة ---
     if len(updated_trades) < 5:
         for symbol, pionex_symbol in PIONEX_SYMBOLS.items():
             if symbol in open_symbols:
@@ -291,7 +289,7 @@ def manage_and_scan_scalper_market():
             df['atr'] = calculate_atr(df, 10)
             
             signal_found = False
-            for i in [-1, -2, -3, -4, -5]:
+            for i in [-1, -2, -3]:  # فحص آخر الشمعات لاقتناص الإشارات السريعة
                 if abs(i) >= len(df):
                     continue
                 curr_candle = df.iloc[i]
@@ -305,13 +303,14 @@ def manage_and_scan_scalper_market():
                 ema9 = curr_candle['ema9']
                 curr_atr = curr_candle['atr']
 
-                stoch_golden_cross = (prev_stoch_k <= prev_stoch_d) and (curr_stoch_k > curr_stoch_d) and (curr_stoch_k < 45)
-                stoch_death_cross = (prev_stoch_k >= prev_stoch_d) and (curr_stoch_k < curr_stoch_d) and (curr_stoch_k > 55)
+                # شروط مرنة ومعدلة لفريم الدقيقة لضمان فتح صفقات متكررة
+                stoch_golden_cross = (prev_stoch_k <= prev_stoch_d) and (curr_stoch_k > curr_stoch_d) and (curr_stoch_k < 60)
+                stoch_death_cross = (prev_stoch_k >= prev_stoch_d) and (curr_stoch_k < curr_stoch_d) and (curr_stoch_k > 40)
 
                 # SHORT 1m
-                if (curr_price < ema9) and stoch_death_cross:
+                if (curr_price <= ema9 * 1.0005) and stoch_death_cross:
                     entry = curr_price
-                    sl = entry + (curr_atr * 1.0)
+                    sl = entry + max(curr_atr * 1.0, entry * 0.0015)
                     risk_dist = sl - entry
                     
                     tp1 = entry - (risk_dist * 0.9)
@@ -319,10 +318,13 @@ def manage_and_scan_scalper_market():
                     tp3 = entry - (risk_dist * 2.4)
 
                     risk_amount = current_balance * RISK_PERCENTAGE
+                    max_margin = current_balance * MAX_TOTAL_MARGIN_RATIO
+                    
                     qty = risk_amount / risk_dist if risk_dist > 0 else 1.0
-                    margin = (entry * qty) / LEVERAGE
+                    if ((entry * qty) / LEVERAGE) > max_margin:
+                        qty = (max_margin * LEVERAGE) / entry
 
-                    if margin <= (current_balance * MAX_TOTAL_MARGIN_RATIO) and entry > tp3:
+                    if entry > tp3 and qty > 0:
                         new_trade = {
                             'Symbol': symbol, 'Side': 'SHORT', 'Entry': entry,
                             'TP1': tp1, 'TP2': tp2, 'TP3': tp3, 'SL': sl, 'Qty': qty, 'HitStage': 0
@@ -342,9 +344,9 @@ def manage_and_scan_scalper_market():
                         break
 
                 # LONG 1m
-                elif (curr_price > ema9) and stoch_golden_cross:
+                elif (curr_price >= ema9 * 0.9995) and stoch_golden_cross:
                     entry = curr_price
-                    sl = entry - (curr_atr * 1.0)
+                    sl = entry - max(curr_atr * 1.0, entry * 0.0015)
                     risk_dist = entry - sl
                     
                     tp1 = entry + (risk_dist * 0.9)
@@ -352,10 +354,13 @@ def manage_and_scan_scalper_market():
                     tp3 = entry + (risk_dist * 2.4)
 
                     risk_amount = current_balance * RISK_PERCENTAGE
+                    max_margin = current_balance * MAX_TOTAL_MARGIN_RATIO
+                    
                     qty = risk_amount / risk_dist if risk_dist > 0 else 1.0
-                    margin = (entry * qty) / LEVERAGE
+                    if ((entry * qty) / LEVERAGE) > max_margin:
+                        qty = (max_margin * LEVERAGE) / entry
 
-                    if margin <= (current_balance * MAX_TOTAL_MARGIN_RATIO) and tp3 > entry:
+                    if tp3 > entry and qty > 0:
                         new_trade = {
                             'Symbol': symbol, 'Side': 'LONG', 'Entry': entry,
                             'TP1': tp1, 'TP2': tp2, 'TP3': tp3, 'SL': sl, 'Qty': qty, 'HitStage': 0
