@@ -2,7 +2,7 @@ name: Run Trading Bots
 
 on:
   schedule:
-    - cron: '*/15 * * * *'
+    - cron: '*/5 * * * *'
   workflow_dispatch:
 
 jobs:
@@ -31,14 +31,14 @@ jobs:
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       run: |
-        python trading_bot.py
+        python strict_bot.py
 
     - name: Run Flexible Bot
       env:
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN_FLEXIBLE }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       run: |
-        python trading_bot_flexible.py
+        python flexible_bot.py
 
     - name: Run Balanced Bot
       env:
@@ -48,11 +48,11 @@ jobs:
 
     - name: Run Global S&R Scanner Bot
       run: |
-        python trading_bot_global.py
+        python global_bot.py
 
     - name: Run Lightning Scalper Bot
       run: |
-        python trading_bot_scalper.py
+        python scalper_bot.py
 
     - name: Commit and push updated balances and trades
       run: |
