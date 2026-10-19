@@ -273,115 +273,108 @@ def manage_and_scan_scalper_market():
         except Exception as e:
             logging.error(f"Error recalculating balance after trade close: {e}")
 
-    # --- البحث عن صفقات جديدة بمرونة عالية تناسب فريم الدقيقة ---
-    if len(updated_trades) < 5:
-        for symbol, pionex_symbol in PIONEX_SYMBOLS.items():
-            if symbol in open_symbols:
-                continue
-                
-            df = get_pionex_candles(pionex_symbol, interval="1m", limit=80)
-            if df is None or len(df) < 30:
-                continue
-                
-            df['rsi'] = calculate_rsi(df['close'], 9)
-            df['stoch_k'], df['stoch_d'] = calculate_stoch_rsi(df['close'], 9, 3, 3)
-            df['ema9'] = df['close'].ewm(span=9, adjust=False).mean()
-            df['atr'] = calculate_atr(df, 10)
+    # --- المسح الشامل المفتوح لجميع العملات لفحص واصطياد الفرص ---
+    for symbol, pionex_symbol in PIONEX_SYMBOLS.items():
+        if len(updated_trades) >= 5:
+            break  # الحد الأقصى 5 صفقات نشطة
+        if symbol in open_symbols:
+            continue
             
-            signal_found = False
-            for i in [-1, -2, -3, -4, -5]:  # توسيع نطاق الفحص ليشمل آخر 5 شمعات بدلاً من 3
-                if abs(i) >= len(df):
-                    continue
-                curr_candle = df.iloc[i]
-                prev_candle = df.iloc[i-1]
+        df = get_pionex_candles(pionex_symbol, interval="1m", limit=80)
+        if df is None or len(df) < 30:
+            continue
+            
+        df['rsi'] = calculate_rsi(df['close'], 9)
+        df['stoch_k'], df['stoch_d'] = calculate_stoch_rsi(df['close'], 9, 3, 3)
+        df['ema9'] = df['close'].ewm(span=9, adjust=False).mean()
+        df['atr'] = calculate_atr(df, 10)
+        
+        for i in [-1, -2, -3, -4, -5]:
+            if abs(i) >= len(df):
+                continue
+            curr_candle = df.iloc[i]
+            prev_candle = df.iloc[i-1]
 
-                curr_price = curr_candle['close']
-                curr_stoch_k = curr_candle['stoch_k']
-                curr_stoch_d = curr_candle['stoch_d']
-                prev_stoch_k = prev_candle['stoch_k']
-                prev_stoch_d = prev_candle['stoch_d']
-                ema9 = curr_candle['ema9']
-                curr_atr = curr_candle['atr']
+            curr_price = curr_candle['close']
+            curr_stoch_k = curr_candle['stoch_k']
+            curr_stoch_d = curr_candle['stoch_d']
+            prev_stoch_k = prev_candle['stoch_k']
+            prev_stoch_d = prev_candle['stoch_d']
+            ema9 = curr_candle['ema9']
+            curr_atr = curr_candle['atr']
 
-                # 🚀 تم جعل شروط التقاطع أكثر مرونة لرفع وتيرة الصفقات السريعة
-                stoch_golden_cross = (prev_stoch_k <= prev_stoch_d) and (curr_stoch_k > curr_stoch_d) and (curr_stoch_k < 70)
-                stoch_death_cross = (prev_stoch_k >= prev_stoch_d) and (curr_stoch_k < curr_stoch_d) and (curr_stoch_k > 30)
+            stoch_golden_cross = (prev_stoch_k <= prev_stoch_d) and (curr_stoch_k > curr_stoch_d) and (curr_stoch_k < 75)
+            stoch_death_cross = (prev_stoch_k >= prev_stoch_d) and (curr_stoch_k < curr_stoch_d) and (curr_stoch_k > 25)
 
-                # SHORT 1m (تم تخفيف شرط الـ EMA ليقبل الصفقات بسهولة أكبر)
-                if (curr_price <= ema9 * 1.002) and stoch_death_cross:
-                    entry = curr_price
-                    sl = entry + max(curr_atr * 1.0, entry * 0.0015)
-                    risk_dist = sl - entry
+            # SHORT 1m
+            if (curr_price <= ema9 * 1.003) and stoch_death_cross:
+                entry = curr_price
+                sl = entry + max(curr_atr * 1.0, entry * 0.0015)
+                risk_dist = sl - entry
+                
+                tp1 = entry - (risk_dist * 0.9)
+                tp2 = entry - (risk_dist * 1.6)
+                tp3 = entry - (risk_dist * 2.4)
+
+                risk_amount = current_balance * RISK_PERCENTAGE
+                max_margin = current_balance * MAX_TOTAL_MARGIN_RATIO
+                
+                qty = risk_amount / risk_dist if risk_dist > 0 else 1.0
+                if ((entry * qty) / LEVERAGE) > max_margin:
+                    qty = (max_margin * LEVERAGE) / entry
+
+                if entry > tp3 and qty > 0:
+                    new_trade = {
+                        'Symbol': symbol, 'Side': 'SHORT', 'Entry': entry,
+                        'TP1': tp1, 'TP2': tp2, 'TP3': tp3, 'SL': sl, 'Qty': qty, 'HitStage': 0
+                    }
+                    updated_trades.append(new_trade)
+                    open_symbols.append(symbol)
                     
-                    tp1 = entry - (risk_dist * 0.9)
-                    tp2 = entry - (risk_dist * 1.6)
-                    tp3 = entry - (risk_dist * 2.4)
+                    send_telegram_message(
+                        f"⚡ *Lightning Scalper: SHORT Signal (5x)*\n"
+                        f"━━━━━━━━━━━━━━━━━━━\n"
+                        f"🔹 الرمز: `{symbol}` | الدخول: `{entry:.4f}`\n"
+                        f"🎯 TP1: `{tp1:.4f}` | TP2: `{tp2:.4f}` | TP3: `{tp3:.4f}`\n"
+                        f"🛑 Stop Loss: `{sl:.4f}`\n"
+                        f"💵 الرصيد الحالي: `${current_balance:.2f}`"
+                    )
+                    break # الانتقال للعملة التالية بعد إيجاد صفقة لهذه العملة
 
-                    risk_amount = current_balance * RISK_PERCENTAGE
-                    max_margin = current_balance * MAX_TOTAL_MARGIN_RATIO
+            # LONG 1m
+            elif (curr_price >= ema9 * 0.997) and stoch_golden_cross:
+                entry = curr_price
+                sl = entry - max(curr_atr * 1.0, entry * 0.0015)
+                risk_dist = entry - sl
+                
+                tp1 = entry + (risk_dist * 0.9)
+                tp2 = entry + (risk_dist * 1.6)
+                tp3 = entry + (risk_dist * 2.4)
+
+                risk_amount = current_balance * RISK_PERCENTAGE
+                max_margin = current_balance * MAX_TOTAL_MARGIN_RATIO
+                
+                qty = risk_amount / risk_dist if risk_dist > 0 else 1.0
+                if ((entry * qty) / LEVERAGE) > max_margin:
+                    qty = (max_margin * LEVERAGE) / entry
+
+                if tp3 > entry and qty > 0:
+                    new_trade = {
+                        'Symbol': symbol, 'Side': 'LONG', 'Entry': entry,
+                        'TP1': tp1, 'TP2': tp2, 'TP3': tp3, 'SL': sl, 'Qty': qty, 'HitStage': 0
+                    }
+                    updated_trades.append(new_trade)
+                    open_symbols.append(symbol)
                     
-                    qty = risk_amount / risk_dist if risk_dist > 0 else 1.0
-                    if ((entry * qty) / LEVERAGE) > max_margin:
-                        qty = (max_margin * LEVERAGE) / entry
-
-                    if entry > tp3 and qty > 0:
-                        new_trade = {
-                            'Symbol': symbol, 'Side': 'SHORT', 'Entry': entry,
-                            'TP1': tp1, 'TP2': tp2, 'TP3': tp3, 'SL': sl, 'Qty': qty, 'HitStage': 0
-                        }
-                        updated_trades.append(new_trade)
-                        open_symbols.append(symbol)
-                        
-                        # 🔴 تفاصيل الصفقة الكاملة كما طلبته
-                        send_telegram_message(
-                            f"⚡ *Lightning Scalper: SHORT Signal (5x)*\n"
-                            f"━━━━━━━━━━━━━━━━━━━\n"
-                            f"🔹 الرمز: `{symbol}` | الدخول: `{entry:.4f}`\n"
-                            f"🎯 TP1: `{tp1:.4f}` | TP2: `{tp2:.4f}` | TP3: `{tp3:.4f}`\n"
-                            f"🛑 Stop Loss: `{sl:.4f}`\n"
-                            f"💵 الرصيد الحالي: `${current_balance:.2f}`"
-                        )
-                        signal_found = True
-                        break
-
-                # LONG 1m (تم تخفيف شرط الـ EMA ليقبل الصفقات بسهولة أكبر)
-                elif (curr_price >= ema9 * 0.998) and stoch_golden_cross:
-                    entry = curr_price
-                    sl = entry - max(curr_atr * 1.0, entry * 0.0015)
-                    risk_dist = entry - sl
-                    
-                    tp1 = entry + (risk_dist * 0.9)
-                    tp2 = entry + (risk_dist * 1.6)
-                    tp3 = entry + (risk_dist * 2.4)
-
-                    risk_amount = current_balance * RISK_PERCENTAGE
-                    max_margin = current_balance * MAX_TOTAL_MARGIN_RATIO
-                    
-                    qty = risk_amount / risk_dist if risk_dist > 0 else 1.0
-                    if ((entry * qty) / LEVERAGE) > max_margin:
-                        qty = (max_margin * LEVERAGE) / entry
-
-                    if tp3 > entry and qty > 0:
-                        new_trade = {
-                            'Symbol': symbol, 'Side': 'LONG', 'Entry': entry,
-                            'TP1': tp1, 'TP2': tp2, 'TP3': tp3, 'SL': sl, 'Qty': qty, 'HitStage': 0
-                        }
-                        updated_trades.append(new_trade)
-                        open_symbols.append(symbol)
-                        
-                        # 🟢 تفاصيل الصفقة الكاملة كما طلبته
-                        send_telegram_message(
-                            f"⚡ *Lightning Scalper: LONG Signal (5x)*\n"
-                            f"━━━━━━━━━━━━━━━━━━━\n"
-                            f"🔹 الرمز: `{symbol}` | الدخول: `{entry:.4f}`\n"
-                            f"🎯 TP1: `{tp1:.4f}` | TP2: `{tp2:.4f}` | TP3: `{tp3:.4f}`\n"
-                            f"🛑 Stop Loss: `{sl:.4f}`\n"
-                            f"💵 الرصيد الحالي: `${current_balance:.2f}`"
-                        )
-                        signal_found = True
-                        break
-            if signal_found:
-                break
+                    send_telegram_message(
+                        f"⚡ *Lightning Scalper: LONG Signal (5x)*\n"
+                        f"━━━━━━━━━━━━━━━━━━━\n"
+                        f"🔹 الرمز: `{symbol}` | الدخول: `{entry:.4f}`\n"
+                        f"🎯 TP1: `{tp1:.4f}` | TP2: `{tp2:.4f}` | TP3: `{tp3:.4f}`\n"
+                        f"🛑 Stop Loss: `{sl:.4f}`\n"
+                        f"💵 الرصيد الحالي: `${current_balance:.2f}`"
+                    )
+                    break # الانتقال للعملة التالية بعد إيجاد صفقة لهذه العملة
 
     if updated_trades:
         df_out = pd.DataFrame(updated_trades).drop_duplicates(subset=['Symbol'])
