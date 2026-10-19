@@ -289,7 +289,7 @@ def manage_and_scan_scalper_market():
             df['atr'] = calculate_atr(df, 10)
             
             signal_found = False
-            for i in [-1, -2, -3]:  # فحص آخر الشمعات لاقتناص الإشارات السريعة
+            for i in [-1, -2, -3, -4, -5]:  # توسيع نطاق الفحص ليشمل آخر 5 شمعات بدلاً من 3
                 if abs(i) >= len(df):
                     continue
                 curr_candle = df.iloc[i]
@@ -303,12 +303,12 @@ def manage_and_scan_scalper_market():
                 ema9 = curr_candle['ema9']
                 curr_atr = curr_candle['atr']
 
-                # شروط مرنة ومعدلة لفريم الدقيقة لضمان فتح صفقات متكررة
-                stoch_golden_cross = (prev_stoch_k <= prev_stoch_d) and (curr_stoch_k > curr_stoch_d) and (curr_stoch_k < 60)
-                stoch_death_cross = (prev_stoch_k >= prev_stoch_d) and (curr_stoch_k < curr_stoch_d) and (curr_stoch_k > 40)
+                # 🚀 تم جعل شروط التقاطع أكثر مرونة لرفع وتيرة الصفقات السريعة
+                stoch_golden_cross = (prev_stoch_k <= prev_stoch_d) and (curr_stoch_k > curr_stoch_d) and (curr_stoch_k < 70)
+                stoch_death_cross = (prev_stoch_k >= prev_stoch_d) and (curr_stoch_k < curr_stoch_d) and (curr_stoch_k > 30)
 
-                # SHORT 1m
-                if (curr_price <= ema9 * 1.0005) and stoch_death_cross:
+                # SHORT 1m (تم تخفيف شرط الـ EMA ليقبل الصفقات بسهولة أكبر)
+                if (curr_price <= ema9 * 1.002) and stoch_death_cross:
                     entry = curr_price
                     sl = entry + max(curr_atr * 1.0, entry * 0.0015)
                     risk_dist = sl - entry
@@ -332,19 +332,20 @@ def manage_and_scan_scalper_market():
                         updated_trades.append(new_trade)
                         open_symbols.append(symbol)
                         
+                        # 🔴 تفاصيل الصفقة الكاملة كما طلبته
                         send_telegram_message(
                             f"⚡ *Lightning Scalper: SHORT Signal (5x)*\n"
                             f"━━━━━━━━━━━━━━━━━━━\n"
                             f"🔹 الرمز: `{symbol}` | الدخول: `{entry:.4f}`\n"
                             f"🎯 TP1: `{tp1:.4f}` | TP2: `{tp2:.4f}` | TP3: `{tp3:.4f}`\n"
-                            f"🛑 SL: `{sl:.4f}`\n"
+                            f"🛑 Stop Loss: `{sl:.4f}`\n"
                             f"💵 الرصيد الحالي: `${current_balance:.2f}`"
                         )
                         signal_found = True
                         break
 
-                # LONG 1m
-                elif (curr_price >= ema9 * 0.9995) and stoch_golden_cross:
+                # LONG 1m (تم تخفيف شرط الـ EMA ليقبل الصفقات بسهولة أكبر)
+                elif (curr_price >= ema9 * 0.998) and stoch_golden_cross:
                     entry = curr_price
                     sl = entry - max(curr_atr * 1.0, entry * 0.0015)
                     risk_dist = entry - sl
@@ -368,12 +369,13 @@ def manage_and_scan_scalper_market():
                         updated_trades.append(new_trade)
                         open_symbols.append(symbol)
                         
+                        # 🟢 تفاصيل الصفقة الكاملة كما طلبته
                         send_telegram_message(
                             f"⚡ *Lightning Scalper: LONG Signal (5x)*\n"
                             f"━━━━━━━━━━━━━━━━━━━\n"
                             f"🔹 الرمز: `{symbol}` | الدخول: `{entry:.4f}`\n"
                             f"🎯 TP1: `{tp1:.4f}` | TP2: `{tp2:.4f}` | TP3: `{tp3:.4f}`\n"
-                            f"🛑 SL: `{sl:.4f}`\n"
+                            f"🛑 Stop Loss: `{sl:.4f}`\n"
                             f"💵 الرصيد الحالي: `${current_balance:.2f}`"
                         )
                         signal_found = True
