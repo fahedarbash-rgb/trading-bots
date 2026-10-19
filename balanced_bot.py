@@ -11,7 +11,7 @@ TELEGRAM_BOT_TOKEN = "8772493944:AAGb4Y1VuBLrCq0vfvnhue7oRW4hjf_LYJE"
 TELEGRAM_CHAT_ID = "5620413191"
 
 INITIAL_BALANCE = 200.0        
-RISK_PERCENTAGE = 0.02        
+BASE_RISK_PERCENTAGE = 0.02        
 LEVERAGE = 3                 
 MAX_TOTAL_MARGIN_RATIO = 0.6  
 
@@ -24,12 +24,55 @@ COINBASE_PRODUCTS = {
     "AVAXUSDT": "AVAX-USD", "LINKUSDT": "LINK-USD", "ADAUSDT": "ADA-USD"
 }
 
-def send_telegram_message(message):
+def get_default_keyboard():
+    """أزرار تفاعلية سريعة تظهر مع التنبيهات"""
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "📊 ملخص الرصيد والأداء", "callback_data": "get_balance"},
+                {"text": "📂 الصفقات النشطة", "callback_data": "get_active_trades"}
+            ]
+        ]
+    }
+
+def send_telegram_message(message, reply_markup=None):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID, 
+        "text": message, 
+        "parse_mode": "Markdown",
+        "reply_markup": reply_markup if reply_markup else get_default_keyboard()
+    }
     try:
-        requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "Markdown"}, timeout=10)
+        requests.post(url, json=payload, timeout=10)
     except Exception as e:
         logging.error(f"Telegram Error: {e}")
+
+def get_dynamic_risk_percentage():
+    """إدارة المخاطر الديناميكية العكسية (Anti-Drawdown Guard)"""
+    if os.path.exists(CLOSED_FILE):
+        try:
+            df_closed = pd.read_csv(CLOSED_FILE)
+            if len(df_closed) >= 2:
+                last_two = df_closed.tail(2)['Result'].tolist()
+                if last_two == ['LOSS', 'LOSS']:
+                    return BASE_RISK_PERCENTAGE * 0.5  # تخفيض المخاطرة مؤقتاً لحماية رصيد الـ 200$
+        except Exception as e:
+            logging.error(f"Error checking anti-drawdown: {e}")
+    return BASE_RISK_PERCENTAGE
+
+def is_volatility_suitable(df):
+    """فلتر التذبذب الذكي (ATR Volatility Filter)"""
+    if df is None or len(df) < 20:
+        return False
+    curr_atr = df.iloc[-1]['atr']
+    avg_atr = df['atr'].tail(20).mean()
+    curr_price = df.iloc[-1]['close']
+    
+    relative_atr = (curr_atr / curr_price) * 100
+    if relative_atr < 0.04 or curr_atr > (avg_atr * 3.0):
+        return False
+    return True
 
 def check_daily_report(active_trades_count, current_balance):
     now = datetime.utcnow()
@@ -150,7 +193,10 @@ def manage_and_scan_market():
             if not tp1_hit and curr_price >= tp1:
                 trade['TP1_Hit'] = True
                 trade['SL'] = entry  
-                send_telegram_message(f"🎯 *Balanced Bot: TP1 Reached! (LONG {symbol})*\n🛡️ تم نقل وقف الخسارة إلى سعر الدخول `{entry:.4f}`.")
+                send_telegram_message(
+                    f"🎯 *Balanced Bot: TP1 Reached! (LONG {symbol})*\n"
+                    f"🛡️ *Break-Even Guard:* تم نقل وقف الخسارة إلى سعر الدخول `{entry:.4f}` الصفقة آمنة 100%! ✅"
+                )
 
             if curr_price >= tp2:
                 profit = (tp2 - entry) * qty
@@ -175,7 +221,10 @@ def manage_and_scan_market():
             if not tp1_hit and curr_price <= tp1:
                 trade['TP1_Hit'] = True
                 trade['SL'] = entry  
-                send_telegram_message(f"🎯 *Balanced Bot: TP1 Reached! (SHORT {symbol})*\n🛡️ تم نقل وقف الخسارة إلى سعر الدخول `{entry:.4f}`.")
+                send_telegram_message(
+                    f"🎯 *Balanced Bot: TP1 Reached! (SHORT {symbol})*\n"
+                    f"🛡️ *Break-Even Guard:* تم نقل وقف الخسارة إلى سعر الدخول `{entry:.4f}` الصفقة آمنة 100%! ✅"
+                )
 
             if curr_price <= tp2:
                 profit = (entry - tp2) * qty
@@ -199,6 +248,8 @@ def manage_and_scan_market():
         if not closed:
             updated_trades.append(trade)
 
+    dynamic_risk = get_dynamic_risk_percentage()
+
     if len(updated_trades) < 3:
         for symbol, coinbase_id in COINBASE_PRODUCTS.items():
             if symbol in open_symbols:
@@ -208,6 +259,10 @@ def manage_and_scan_market():
                 continue
             df['rsi'] = calculate_rsi(df['close'], 14)
             df['atr'] = calculate_atr(df, 14)
+            
+            if not is_volatility_suitable(df):
+                continue
+
             curr_price = df.iloc[-1]['close']
             curr_rsi = df.iloc[-1]['rsi']
             curr_atr = df.iloc[-1]['atr']
@@ -219,7 +274,7 @@ def manage_and_scan_market():
                 sl = entry - (curr_atr * 1.5)
                 tp1 = entry + (curr_atr * 1.5)
                 tp2 = entry + (curr_atr * 2.5)
-                qty = (current_balance * RISK_PERCENTAGE) / (entry - sl) if (entry - sl) > 0 else 1.0
+                qty = (current_balance * dynamic_risk) / (entry - sl) if (entry - sl) > 0 else 1.0
                 if ((entry * qty) / LEVERAGE) <= (current_balance * MAX_TOTAL_MARGIN_RATIO) and tp1 > entry:
                     updated_trades.append({'Symbol': symbol, 'Side': 'LONG', 'Entry': entry, 'TP1': tp1, 'TP2': tp2, 'SL': sl, 'Qty': qty, 'TP1_Hit': False})
                     open_symbols.append(symbol)
@@ -237,7 +292,7 @@ def manage_and_scan_market():
                 sl = entry + (curr_atr * 1.5)
                 tp1 = entry - (curr_atr * 1.5)
                 tp2 = entry - (curr_atr * 2.5)
-                qty = (current_balance * RISK_PERCENTAGE) / (sl - entry) if (sl - entry) > 0 else 1.0
+                qty = (current_balance * dynamic_risk) / (sl - entry) if (sl - entry) > 0 else 1.0
                 if ((entry * qty) / LEVERAGE) <= (current_balance * MAX_TOTAL_MARGIN_RATIO) and entry > tp1:
                     updated_trades.append({'Symbol': symbol, 'Side': 'SHORT', 'Entry': entry, 'TP1': tp1, 'TP2': tp2, 'SL': sl, 'Qty': qty, 'TP1_Hit': False})
                     open_symbols.append(symbol)
