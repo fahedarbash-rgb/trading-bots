@@ -17,7 +17,7 @@ TELEGRAM_BOT_TOKEN = "8733239782:AAFgTANZqzFSa1LF5E57_mPJIBOJIlHnou0"
 TELEGRAM_CHAT_ID = "5620413191"
 
 INITIAL_BALANCE = 200.0     
-RISK_PERCENTAGE = 0.015    
+BASE_RISK_PERCENTAGE = 0.015    
 LEVERAGE = 5     # رافعة مالية 5x تناسب السكالبينج اللحظي السريع
 MAX_TOTAL_MARGIN_RATIO = 0.6  
 
@@ -38,13 +38,56 @@ PIONEX_SYMBOLS = {
     "SUIUSDT": "SUI_USDT"
 }
 
-def send_telegram_message(message):
+def get_default_keyboard():
+    """أزرار تفاعلية سريعة تظهر مع التنبيهات"""
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "📊 ملخص الرصيد والأداء", "callback_data": "get_balance"},
+                {"text": "📂 الصفقات النشطة", "callback_data": "get_active_trades"}
+            ]
+        ]
+    }
+
+def send_telegram_message(message, reply_markup=None):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "Markdown"}
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID, 
+        "text": message, 
+        "parse_mode": "Markdown",
+        "reply_markup": reply_markup if reply_markup else get_default_keyboard()
+    }
     try:
         requests.post(url, json=payload, timeout=10)
     except Exception as e:
         logging.error(f"Telegram Error: {e}")
+
+def get_dynamic_risk_percentage():
+    """إدارة المخاطر الديناميكية العكسية (Anti-Drawdown Guard)"""
+    if os.path.exists(CLOSED_FILE):
+        try:
+            df_closed = pd.read_csv(CLOSED_FILE)
+            if len(df_closed) >= 2:
+                last_two = df_closed.tail(2)['Result'].tolist()
+                if last_two == ['LOSS', 'LOSS']:
+                    return BASE_RISK_PERCENTAGE * 0.5  # تخفيض المخاطرة للنصف لحماية رصيد الـ 200$
+        except Exception as e:
+            logging.error(f"Error checking anti-drawdown: {e}")
+    return BASE_RISK_PERCENTAGE
+
+def is_volatility_suitable(df):
+    """فلتر التذبذب الذكي (ATR Volatility Filter)"""
+    if df is None or len(df) < 20:
+        return False
+    curr_atr = df.iloc[-1]['atr']
+    avg_atr = df['atr'].tail(20).mean()
+    curr_price = df.iloc[-1]['close']
+    
+    # حماية من الركود التام (Low Volatility) أو الانزلاقات الخطيرة (Extreme Volatility)
+    relative_atr = (curr_atr / curr_price) * 100
+    if relative_atr < 0.03 or curr_atr > (avg_atr * 3.0):
+        return False
+    return True
 
 def check_daily_report(active_trades_count, current_balance):
     now = datetime.utcnow()
@@ -74,12 +117,13 @@ def check_daily_report(active_trades_count, current_balance):
 
         roi_percent = ((current_balance - INITIAL_BALANCE) / INITIAL_BALANCE) * 100
         report_msg = (
-            f"⚡ *Lightning Scalper (5x - 1m): التقرير اليومي النشط*\n"
+            f"⚡ *Lightning Scalper (5x - 1m): التقرير اليومي الشامل*\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
             f"⏰ الوقت: `{now.strftime('%Y-%m-%d %H:%M:%S')} UTC`\n"
             f"💰 الرصيد الحالي: `${current_balance:.2f}` (ROI: `{roi_percent:+.2f}%`)\n"
             f"📈 إجمالي الأرباح: `${total_pnl:+.2f}`\n"
             f"🎯 صفقات رابحة: `{wins}` | 🛑 صفقات خاسرة: `{losses}`\n"
+            f"📂 الصفقات النشطة حالياً: `{active_trades_count} صفقات`\n"
             f"🚀 *الحالة:* البوت يعمل بكفاءة عالية عبر Pionex API."
         )
         send_telegram_message(report_msg)
@@ -214,12 +258,19 @@ def manage_and_scan_scalper_market():
                     closed = True
                 elif hit_stage < 2 and curr_price >= tp2:
                     trade['HitStage'] = 2
-                    trade['SL'] = entry
-                    send_telegram_message(f"🚀 *Lightning Scalper TP2 Reached! (LONG {symbol})* - SL moved to Entry.")
+                    trade['SL'] = tp1  # Trailing stop to TP1
+                    send_telegram_message(
+                        f"🚀 *Lightning Scalper: TP2 Reached! (LONG {symbol})*\n"
+                        f"🛡️ *Break-Even Guard:* تم نقل وقف الخسارة لحجز الأرباح إلى `{tp1:.4f}` 🔒"
+                    )
                     updated_trades.append(trade)
                 elif hit_stage < 1 and curr_price >= tp1:
                     trade['HitStage'] = 1
-                    send_telegram_message(f"📈 *Lightning Scalper TP1 Reached! (LONG {symbol})*")
+                    trade['SL'] = entry
+                    send_telegram_message(
+                        f"📈 *Lightning Scalper: TP1 Reached! (LONG {symbol})*\n"
+                        f"🛡️ *Break-Even Guard:* تم نقل وقف الخسارة إلى سعر الدخول `{entry:.4f}` الصفقة آمنة 100%! ✅"
+                    )
                     updated_trades.append(trade)
                 else:
                     if not closed and trade not in updated_trades:
@@ -254,12 +305,19 @@ def manage_and_scan_scalper_market():
                     closed = True
                 elif hit_stage < 2 and curr_price <= tp2:
                     trade['HitStage'] = 2
-                    trade['SL'] = entry
-                    send_telegram_message(f"🚀 *Lightning Scalper TP2 Reached! (SHORT {symbol})* - SL moved to Entry.")
+                    trade['SL'] = tp1  # Trailing stop to TP1
+                    send_telegram_message(
+                        f"🚀 *Lightning Scalper: TP2 Reached! (SHORT {symbol})*\n"
+                        f"🛡️ *Break-Even Guard:* تم نقل وقف الخسارة لحجز الأرباح إلى `{tp1:.4f}` 🔒"
+                    )
                     updated_trades.append(trade)
                 elif hit_stage < 1 and curr_price <= tp1:
                     trade['HitStage'] = 1
-                    send_telegram_message(f"📉 *Lightning Scalper TP1 Reached! (SHORT {symbol})*")
+                    trade['SL'] = entry
+                    send_telegram_message(
+                        f"📉 *Lightning Scalper: TP1 Reached! (SHORT {symbol})*\n"
+                        f"🛡️ *Break-Even Guard:* تم نقل وقف الخسارة إلى سعر الدخول `{entry:.4f}` الصفقة آمنة 100%! ✅"
+                    )
                     updated_trades.append(trade)
                 else:
                     if not closed and trade not in updated_trades:
@@ -274,6 +332,8 @@ def manage_and_scan_scalper_market():
             logging.error(f"Error recalculating balance after trade close: {e}")
 
     # --- المسح الشامل المفتوح لجميع العملات لفحص واصطياد الفرص ---
+    dynamic_risk = get_dynamic_risk_percentage()
+
     for symbol, pionex_symbol in PIONEX_SYMBOLS.items():
         if len(updated_trades) >= 5:
             break  # الحد الأقصى 5 صفقات نشطة
@@ -289,6 +349,10 @@ def manage_and_scan_scalper_market():
         df['ema9'] = df['close'].ewm(span=9, adjust=False).mean()
         df['atr'] = calculate_atr(df, 10)
         
+        # فحص التذبذب لحماية الحساب
+        if not is_volatility_suitable(df):
+            continue
+
         for i in [-1, -2, -3, -4, -5]:
             if abs(i) >= len(df):
                 continue
@@ -316,7 +380,7 @@ def manage_and_scan_scalper_market():
                 tp2 = entry - (risk_dist * 1.6)
                 tp3 = entry - (risk_dist * 2.4)
 
-                risk_amount = current_balance * RISK_PERCENTAGE
+                risk_amount = current_balance * dynamic_risk
                 max_margin = current_balance * MAX_TOTAL_MARGIN_RATIO
                 
                 qty = risk_amount / risk_dist if risk_dist > 0 else 1.0
@@ -339,7 +403,7 @@ def manage_and_scan_scalper_market():
                         f"🛑 Stop Loss: `{sl:.4f}`\n"
                         f"💵 الرصيد الحالي: `${current_balance:.2f}`"
                     )
-                    break # الانتقال للعملة التالية بعد إيجاد صفقة لهذه العملة
+                    break
 
             # LONG 1m
             elif (curr_price >= ema9 * 0.997) and stoch_golden_cross:
@@ -351,7 +415,7 @@ def manage_and_scan_scalper_market():
                 tp2 = entry + (risk_dist * 1.6)
                 tp3 = entry + (risk_dist * 2.4)
 
-                risk_amount = current_balance * RISK_PERCENTAGE
+                risk_amount = current_balance * dynamic_risk
                 max_margin = current_balance * MAX_TOTAL_MARGIN_RATIO
                 
                 qty = risk_amount / risk_dist if risk_dist > 0 else 1.0
@@ -374,7 +438,7 @@ def manage_and_scan_scalper_market():
                         f"🛑 Stop Loss: `{sl:.4f}`\n"
                         f"💵 الرصيد الحالي: `${current_balance:.2f}`"
                     )
-                    break # الانتقال للعملة التالية بعد إيجاد صفقة لهذه العملة
+                    break
 
     if updated_trades:
         df_out = pd.DataFrame(updated_trades).drop_duplicates(subset=['Symbol'])
