@@ -223,7 +223,14 @@ def manage_and_scan_market():
                 if ((entry * qty) / LEVERAGE) <= (current_balance * MAX_TOTAL_MARGIN_RATIO) and tp1 > entry:
                     updated_trades.append({'Symbol': symbol, 'Side': 'LONG', 'Entry': entry, 'TP1': tp1, 'TP2': tp2, 'SL': sl, 'Qty': qty, 'TP1_Hit': False})
                     open_symbols.append(symbol)
-                    send_telegram_message(f"🚀 *Balanced Bot: New LONG* `{symbol}`\n📍 الدخول: `{entry:.4f}` | الرصيد: `${current_balance:.2f}`")
+                    send_telegram_message(
+                        f"🚀 *Balanced Bot: New LONG* `{symbol}`\n"
+                        f"━━━━━━━━━━━━━━━━━━━\n"
+                        f"📍 سعر الدخول: `{entry:.4f}`\n"
+                        f"🎯 TP1: `{tp1:.4f}` | TP2: `{tp2:.4f}`\n"
+                        f"🛑 Stop Loss: `{sl:.4f}`\n"
+                        f"💵 الرصيد الحالي: `${current_balance:.2f}`"
+                    )
                     break
             elif curr_rsi > 60 and curr_volume > (avg_volume * 1.0):
                 entry = curr_price
@@ -234,7 +241,14 @@ def manage_and_scan_market():
                 if ((entry * qty) / LEVERAGE) <= (current_balance * MAX_TOTAL_MARGIN_RATIO) and entry > tp1:
                     updated_trades.append({'Symbol': symbol, 'Side': 'SHORT', 'Entry': entry, 'TP1': tp1, 'TP2': tp2, 'SL': sl, 'Qty': qty, 'TP1_Hit': False})
                     open_symbols.append(symbol)
-                    send_telegram_message(f"🚀 *Balanced Bot: New SHORT* `{symbol}`\n📍 الدخول: `{entry:.4f}` | الرصيد: `${current_balance:.2f}`")
+                    send_telegram_message(
+                        f"🚀 *Balanced Bot: New SHORT* `{symbol}`\n"
+                        f"━━━━━━━━━━━━━━━━━━━\n"
+                        f"📍 سعر الدخول: `{entry:.4f}`\n"
+                        f"🎯 TP1: `{tp1:.4f}` | TP2: `{tp2:.4f}`\n"
+                        f"🛑 Stop Loss: `{sl:.4f}`\n"
+                        f"💵 الرصيد الحالي: `${current_balance:.2f}`"
+                    )
                     break
 
     if updated_trades:
