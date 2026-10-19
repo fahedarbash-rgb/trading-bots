@@ -16,14 +16,15 @@ TELEGRAM_BOT_TOKEN = "8733239782:AAFgTANZqzFSa1LF5E57_mPJIBOJIlHnou0"
 TELEGRAM_CHAT_ID = "5620413191"
 
 INITIAL_BALANCE = 200.0     
-BASE_RISK_PERCENTAGE = 0.025   # زيادة طفيفة لزيادة نشاط الصفقات
-LEVERAGE = 5     
-MAX_TOTAL_MARGIN_RATIO = 0.6  
+BASE_RISK_PERCENTAGE = 0.02   # 2% مخاطرة مدروسة
+LEVERAGE = 10                  # رافعة مالية 10x سريعة للسكالبينج المكثف
+MAX_TOTAL_MARGIN_RATIO = 0.5  # أقصى هامش مستخدم 50% لحماية الحساب
 
 TRADE_FILE = "active_scalper_trades.csv"
 CLOSED_FILE = "closed_scalper_trades_history.csv"
 HEARTBEAT_FILE = "last_scalper_heartbeat.txt"
 
+# قائمة العملات الموسعة لاصطياد أكبر عدد من الفرص اللحظية
 PIONEX_SYMBOLS = {
     "BTCUSDT": "BTC_USDT",
     "ETHUSDT": "ETH_USDT",
@@ -33,26 +34,16 @@ PIONEX_SYMBOLS = {
     "AVAXUSDT": "AVAX_USDT",
     "LINKUSDT": "LINK_USDT",
     "DOGEUSDT": "DOGE_USDT",
-    "SUIUSDT": "SUI_USDT"
+    "SUIUSDT": "SUI_USDT",
+    "NEARUSDT": "NEAR_USDT"
 }
 
-def get_default_keyboard():
-    return {
-        "inline_keyboard": [
-            [
-                {"text": "📊 ملخص الرصيد والأداء", "callback_data": "get_balance"},
-                {"text": "📂 الصفقات النشطة", "callback_data": "get_active_trades"}
-            ]
-        ]
-    }
-
-def send_telegram_message(message, reply_markup=None):
+def send_telegram_message(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
         "chat_id": TELEGRAM_CHAT_ID, 
         "text": message, 
-        "parse_mode": "Markdown",
-        "reply_markup": reply_markup if reply_markup else get_default_keyboard()
+        "parse_mode": "Markdown"
     }
     try:
         requests.post(url, json=payload, timeout=10)
@@ -87,14 +78,14 @@ def check_daily_report(active_trades_count, current_balance):
 
         roi_percent = ((current_balance - INITIAL_BALANCE) / INITIAL_BALANCE) * 100
         report_msg = (
-            f"⚡ *Lightning Scalper (New Strategy - 5x - 1m)*\n"
+            f"⚡ *Lightning Scalper (High-Frequency 10x - 1m)*\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
             f"⏰ الوقت: `{now.strftime('%Y-%m-%d %H:%M:%S')} UTC`\n"
             f"💰 الرصيد الحالي: `${current_balance:.2f}` (ROI: `{roi_percent:+.2f}%`)\n"
             f"📈 إجمالي الأرباح: `${total_pnl:+.2f}`\n"
             f"🎯 صفقات رابحة: `{wins}` | 🛑 صفقات خاسرة: `{losses}`\n"
             f"📂 الصفقات النشطة: `{active_trades_count}`\n"
-            f"🚀 *الحالة:* استراتيجية الزخم السريع تعمل بكفاءة."
+            f"🚀 *الحالة:* استراتيجية السكالبينج المكثف تعمل بنشاط."
         )
         send_telegram_message(report_msg)
         try:
@@ -111,7 +102,7 @@ def save_closed_trade(trade_data):
     except Exception as e:
         logging.error(f"Error saving closed trade: {e}")
 
-def get_pionex_candles(symbol, interval="1m", limit=50):
+def get_pionex_candles(symbol, interval="1m", limit=30):
     url = f"https://api.pionex.com/api/v1/market/klines?symbol={symbol}&interval={interval}&limit={limit}"
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
@@ -135,7 +126,7 @@ def get_pionex_candles(symbol, interval="1m", limit=50):
         logging.error(f"Error fetching {symbol}: {e}")
         return None
 
-def calculate_rsi(series, period=7):
+def calculate_rsi(series, period=5):
     delta = series.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
@@ -162,7 +153,7 @@ def manage_and_scan_scalper_market():
     updated_trades = []
     open_symbols = [t['Symbol'] for t in active_trades]
 
-    # --- إدارة الصفقات النشطة ---
+    # --- 1️⃣ إدارة الصفقات المفتوحة (تأمين وتصفية سريعة) ---
     for trade in active_trades:
         symbol = trade['Symbol']
         pionex_symbol = PIONEX_SYMBOLS.get(symbol, f"{symbol.replace('USDT', '_USDT')}")
@@ -187,24 +178,24 @@ def manage_and_scan_scalper_market():
             if curr_price <= sl:
                 loss = (entry - sl) * qty if sl != entry else 0.0
                 result_status = 'NEUTRAL' if sl == entry else 'LOSS'
-                send_telegram_message(f"🛑 *Lightning Scalper: SL Hit (LONG {symbol})*\nالأثر: `-${loss:.2f}`")
+                send_telegram_message(f"🛑 *High-Speed Scalper: SL Hit (LONG {symbol})*\n📉 الأثر: `-${loss:.2f}`")
                 save_closed_trade({'Timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), 'Symbol': symbol, 'Side': side, 'Entry': entry, 'Exit': sl, 'Result': result_status, 'Reason': 'SL Hit', 'PnL': round(-loss, 2)})
                 closed = True
             else:
                 if hit_stage < 3 and curr_price >= tp3:
                     profit = (tp3 - entry) * qty
-                    send_telegram_message(f"🎉 *Lightning Scalper: TP3 Hit (LONG {symbol})*\nربح: `+${profit:.2f}`")
+                    send_telegram_message(f"🎉 *High-Speed Scalper: TP3 Final Hit! (LONG {symbol})*\n💰 ربح: `+${profit:.2f}`")
                     save_closed_trade({'Timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), 'Symbol': symbol, 'Side': side, 'Entry': entry, 'Exit': tp3, 'Result': 'WIN', 'Reason': 'TP3', 'PnL': round(profit, 2)})
                     closed = True
                 elif hit_stage < 2 and curr_price >= tp2:
                     trade['HitStage'] = 2
                     trade['SL'] = tp1
-                    send_telegram_message(f"🚀 *Lightning Scalper: TP2 Reached (LONG {symbol})*\nتم نقل وقف الخسارة إلى TP1 🔒")
+                    send_telegram_message(f"🚀 *High-Speed Scalper: TP2 Hit (LONG {symbol})*\n🔒 نقل الوقف إلى TP1")
                     updated_trades.append(trade)
                 elif hit_stage < 1 and curr_price >= tp1:
                     trade['HitStage'] = 1
                     trade['SL'] = entry
-                    send_telegram_message(f"📈 *Lightning Scalper: TP1 Reached (LONG {symbol})*\nتم تأمين الصفقة عند الدخول ✅")
+                    send_telegram_message(f"📈 *High-Speed Scalper: TP1 Hit (LONG {symbol})*\n🛡️ تأمين الصفقة عند سعر الدخول Break-Even ✅")
                     updated_trades.append(trade)
                 else:
                     if not closed and trade not in updated_trades:
@@ -214,61 +205,66 @@ def manage_and_scan_scalper_market():
             if curr_price >= sl:
                 loss = (sl - entry) * qty if sl != entry else 0.0
                 result_status = 'NEUTRAL' if sl == entry else 'LOSS'
-                send_telegram_message(f"🛑 *Lightning Scalper: SL Hit (SHORT {symbol})*\nالأثر: `-${loss:.2f}`")
+                send_telegram_message(f"🛑 *High-Speed Scalper: SL Hit (SHORT {symbol})*\n📉 الأثر: `-${loss:.2f}`")
                 save_closed_trade({'Timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), 'Symbol': symbol, 'Side': side, 'Entry': entry, 'Exit': sl, 'Result': result_status, 'Reason': 'SL Hit', 'PnL': round(-loss, 2)})
                 closed = True
             else:
                 if hit_stage < 3 and curr_price <= tp3:
                     profit = (entry - tp3) * qty
-                    send_telegram_message(f"🎉 *Lightning Scalper: TP3 Hit (SHORT {symbol})*\nربح: `+${profit:.2f}`")
+                    send_telegram_message(f"🎉 *High-Speed Scalper: TP3 Final Hit! (SHORT {symbol})*\n💰 ربح: `+${profit:.2f}`")
                     save_closed_trade({'Timestamp': datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), 'Symbol': symbol, 'Side': side, 'Entry': entry, 'Exit': tp3, 'Result': 'WIN', 'Reason': 'TP3', 'PnL': round(profit, 2)})
                     closed = True
                 elif hit_stage < 2 and curr_price <= tp2:
                     trade['HitStage'] = 2
                     trade['SL'] = tp1
-                    send_telegram_message(f"🚀 *Lightning Scalper: TP2 Reached (SHORT {symbol})*\nتم نقل وقف الخسارة إلى TP1 🔒")
+                    send_telegram_message(f"🚀 *High-Speed Scalper: TP2 Hit (SHORT {symbol})*\n🔒 نقل الوقف إلى TP1")
                     updated_trades.append(trade)
                 elif hit_stage < 1 and curr_price <= tp1:
                     trade['HitStage'] = 1
                     trade['SL'] = entry
-                    send_telegram_message(f"📉 *Lightning Scalper: TP1 Reached (SHORT {symbol})*\nتم تأمين الصفقة عند الدخول ✅")
+                    send_telegram_message(f"📉 *High-Speed Scalper: TP1 Hit (SHORT {symbol})*\n🛡️ تأمين الصفقة عند سعر الدخول Break-Even ✅")
                     updated_trades.append(trade)
                 else:
                     if not closed and trade not in updated_trades:
                         updated_trades.append(trade)
 
-    # --- استراتيجية الزخم الجديدة كلياً (EMA Crossover + RSI 7) ---
+    # --- 2️⃣ البحث عن صفقات جديدة عالية التكرار (Micro-Trend & Volume Scalp) ---
     for symbol, pionex_symbol in PIONEX_SYMBOLS.items():
-        if len(updated_trades) >= 5:
+        if len(updated_trades) >= 3: # 3 صفقات كحد أقصى لمنع التشتت
             break  
         if symbol in open_symbols:
             continue
             
-        df = get_pionex_candles(pionex_symbol, interval="1m", limit=30)
-        if df is None or len(df) < 15:
+        df = get_pionex_candles(pionex_symbol, interval="1m", limit=20)
+        if df is None or len(df) < 12:
             continue
             
-        df['ema5'] = df['close'].ewm(span=5, adjust=False).mean()
-        df['ema13'] = df['close'].ewm(span=13, adjust=False).mean()
-        df['rsi'] = calculate_rsi(df['close'], period=7)
+        df['ema3'] = df['close'].ewm(span=3, adjust=False).mean()
+        df['ema8'] = df['close'].ewm(span=8, adjust=False).mean()
+        df['rsi'] = calculate_rsi(df['close'], period=5)
+        df['vol_avg'] = df['volume'].rolling(window=8).mean()
         
         curr = df.iloc[-1]
         prev = df.iloc[-2]
 
         curr_price = curr['close']
         
-        # شروط تقاطع EMA السريع (5 مع 13) مع مؤشر RSI
-        is_long = (prev['ema5'] <= prev['ema13']) and (curr['ema5'] > curr['ema13']) and (curr['rsi'] > 45) and (curr['rsi'] < 70)
-        is_short = (prev['ema5'] >= prev['ema13']) and (curr['ema5'] < curr['ema13']) and (curr['rsi'] < 55) and (curr['rsi'] > 30)
+        # شرط الفوليوم: حجم الشمعة أعلى من متوسط 8 شمعات لضمان الحركة الحية
+        has_volume = curr['volume'] >= (curr['vol_avg'] * 0.9)
+
+        # صفقات LONG سريعة
+        is_long = (prev['ema3'] <= prev['ema8']) and (curr['ema3'] > curr['ema8']) and (curr['rsi'] > 40) and has_volume
+        # صفقات SHORT سريعة
+        is_short = (prev['ema3'] >= prev['ema8']) and (curr['ema3'] < curr['ema8']) and (curr['rsi'] < 60) and has_volume
 
         if is_long:
             entry = curr_price
-            sl = entry * 0.996  # وقف خسارة 0.4%
+            sl = entry * 0.997  # وقف خسارة 0.3%
             risk_dist = entry - sl
             
-            tp1 = entry + (risk_dist * 1.2)
-            tp2 = entry + (risk_dist * 2.2)
-            tp3 = entry + (risk_dist * 3.5)
+            tp1 = entry * 1.004 # هدف أول 0.4%
+            tp2 = entry * 1.008 # هدف ثاني 0.8%
+            tp3 = entry * 1.012 # هدف ثالث 1.2%
 
             risk_amount = current_balance * BASE_RISK_PERCENTAGE
             max_margin = current_balance * MAX_TOTAL_MARGIN_RATIO
@@ -285,22 +281,22 @@ def manage_and_scan_scalper_market():
                 open_symbols.append(symbol)
                 
                 send_telegram_message(
-                    f"⚡ *Lightning Scalper: LONG Signal (EMA Momentum)*\n"
+                    f"⚡ *Scalper 10x: LONG Signal*\n"
                     f"━━━━━━━━━━━━━━━━━━━\n"
                     f"🔹 الرمز: `{symbol}` | الدخول: `{entry:.4f}`\n"
                     f"🎯 TP1: `{tp1:.4f}` | TP2: `{tp2:.4f}` | TP3: `{tp3:.4f}`\n"
-                    f"🛑 Stop Loss: `{sl:.4f}`\n"
+                    f"🛑 Stop Loss: `{sl:.4f}` (0.3%)\n"
                     f"💵 الرصيد الحالي: `${current_balance:.2f}`"
                 )
 
         elif is_short:
             entry = curr_price
-            sl = entry * 1.004  # وقف خسارة 0.4%
+            sl = entry * 1.003  # وقف خسارة 0.3%
             risk_dist = sl - entry
             
-            tp1 = entry - (risk_dist * 1.2)
-            tp2 = entry - (risk_dist * 2.2)
-            tp3 = entry - (risk_dist * 3.5)
+            tp1 = entry * 0.996 # هدف أول 0.4%
+            tp2 = entry * 0.992 # هدف ثاني 0.8%
+            tp3 = entry * 0.988 # هدف ثالث 1.2%
 
             risk_amount = current_balance * BASE_RISK_PERCENTAGE
             max_margin = current_balance * MAX_TOTAL_MARGIN_RATIO
@@ -317,11 +313,11 @@ def manage_and_scan_scalper_market():
                 open_symbols.append(symbol)
                 
                 send_telegram_message(
-                    f"⚡ *Lightning Scalper: SHORT Signal (EMA Momentum)*\n"
+                    f"⚡ *Scalper 10x: SHORT Signal*\n"
                     f"━━━━━━━━━━━━━━━━━━━\n"
                     f"🔹 الرمز: `{symbol}` | الدخول: `{entry:.4f}`\n"
                     f"🎯 TP1: `{tp1:.4f}` | TP2: `{tp2:.4f}` | TP3: `{tp3:.4f}`\n"
-                    f"🛑 Stop Loss: `{sl:.4f}`\n"
+                    f"🛑 Stop Loss: `{sl:.4f}` (0.3%)\n"
                     f"💵 الرصيد الحالي: `${current_balance:.2f}`"
                 )
 
